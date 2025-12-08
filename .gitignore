@@ -32,7 +32,8 @@ node_modules/
 dist/
 dist-ssr/
 *.local
-
+release/
+build/
 # IDE
 .vscode/
 .idea/

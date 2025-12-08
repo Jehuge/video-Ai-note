@@ -25,19 +25,14 @@ export default function UploadForm() {
     const file = e.target.files?.[0]
     if (!file) return
 
-    // 检查文件类型
-    const allowedTypes = [
-      'video/mp4',
-      'video/avi',
-      'video/mov',
-      'video/mkv',
-      'video/webm',
-      'audio/mp3',
-      'audio/wav',
-      'audio/m4a',
-    ]
-
-    if (!allowedTypes.includes(file.type)) {
+    // 检查文件类型（基于扩展名和 MIME 类型）
+    const fileExtension = file.name.split('.').pop()?.toLowerCase()
+    const allowedExtensions = ['mp4', 'avi', 'mov', 'mkv', 'webm', 'mp3', 'wav', 'm4a', 'flv', 'wmv']
+    
+    const isAllowedExtension = fileExtension && allowedExtensions.includes(fileExtension)
+    const isAllowedMime = file.type.startsWith('video/') || file.type.startsWith('audio/')
+    
+    if (!isAllowedExtension && !isAllowedMime) {
       toast.error('不支持的文件类型，请上传视频或音频文件')
       e.target.value = ''
       return
@@ -171,12 +166,12 @@ export default function UploadForm() {
               <span className="text-xs text-gray-400 mt-1">
                 支持 MP4, AVI, MOV, MKV, MP3, WAV 等格式（最大 500MB）
               </span>
-            </div>
+            </div> 
           )}
           <input
             type="file"
             className="hidden"
-            accept="video/*,audio/*"
+            // 移除 accept 属性以避免某些系统下文件无法选择的问题，文件类型检查已在 onChange 中处理
             onChange={handleFileSelect}
             disabled={uploading}
           />
@@ -192,4 +187,3 @@ export default function UploadForm() {
     </>
   )
 }
-

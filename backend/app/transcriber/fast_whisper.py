@@ -19,9 +19,17 @@ class FastWhisperTranscriber(Transcriber):
         """
         self.model_size = model_size
         self.device = device
-        logger.info(f"初始化 FastWhisper 转录器: model_size={model_size}, device={device}")
-        self.model = WhisperModel(model_size, device=device)
+        self._model = None
+        logger.info(f"配置 FastWhisper 转录器: model_size={model_size}, device={device}")
     
+    @property
+    def model(self):
+        if self._model is None:
+            logger.info(f"正在加载 FastWhisper 模型: {self.model_size}...")
+            self._model = WhisperModel(self.model_size, device=self.device)
+            logger.info("FastWhisper 模型加载完成")
+        return self._model
+
     def transcript(self, file_path: str) -> TranscriptResult:
         """转录音频文件"""
         logger.info(f"开始转录: {file_path}")
@@ -59,4 +67,3 @@ class FastWhisperTranscriber(Transcriber):
             full_text=full_text,
             segments=transcript_segments
         )
-

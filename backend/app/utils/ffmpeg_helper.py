@@ -13,8 +13,19 @@ logger = get_logger(__name__)
 
 # 项目根目录
 PROJECT_ROOT = Path(__file__).parent.parent.parent
-FFMPEG_DIR = PROJECT_ROOT / "ffmpeg_bin"
-FFMPEG_DIR.mkdir(exist_ok=True)
+
+# 优先使用环境变量中的 FFMPEG_BIN_DIR (由 app_entry.py 设置的用户可写目录)
+ffmpeg_bin_env = os.getenv("FFMPEG_BIN_DIR")
+if ffmpeg_bin_env:
+    FFMPEG_DIR = Path(ffmpeg_bin_env)
+else:
+    FFMPEG_DIR = PROJECT_ROOT / "ffmpeg_bin"
+
+try:
+    FFMPEG_DIR.mkdir(parents=True, exist_ok=True)
+except Exception as e:
+    # 即使创建失败也继续，因为可能不需要下载 ffmpeg
+    logger.warning(f"无法创建 ffmpeg 目录 {FFMPEG_DIR}: {e}")
 
 
 def get_ffmpeg_path() -> str:
@@ -97,4 +108,3 @@ def check_ffmpeg_available() -> bool:
     except Exception as e:
         logger.warning(f"ffmpeg 不可用: {e}")
         return False
-
