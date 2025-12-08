@@ -99,6 +99,6 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='VideoNoteAI.app',
-    icon=None,
+    icon='icon.icns',
     bundle_identifier='com.jackjia.videonoteai',
 )
