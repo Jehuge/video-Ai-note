@@ -27,15 +27,52 @@ IMAGE_BASE_URL = os.getenv("IMAGE_BASE_URL", "/api/note_results/screenshots")
 class NoteGenerator:
     """笔记生成器"""
     
-    def __init__(self):
+    def __init__(self, model_config: dict = None):
         self.transcriber = get_transcriber()
         self.gpt = None  # 延迟初始化，避免启动时就需要 API key
+        self.model_config = model_config  # 保存模型配置
         logger.info("NoteGenerator 初始化完成")
     
     def _get_gpt(self):
         """延迟初始化 GPT 实例"""
         if self.gpt is None:
-            self.gpt = OpenAIGPT()
+            if self.model_config:
+                # 使用提供的模型配置
+                provider = self.model_config.get('provider', 'openai')
+                api_key = self.model_config.get('api_key', '')
+                base_url = self.model_config.get('base_url', '')
+                model = self.model_config.get('model', '')
+                
+                logger.info(f"使用模型配置: provider={provider}, model={model}, base_url={base_url}")
+                
+                # 根据提供商创建对应的 GPT 实例
+                if provider == 'ollama':
+                    # Ollama 使用 OpenAI 兼容接口
+                    # 确保 base_url 正确
+                    if not base_url or base_url.strip() == '':
+                        base_url = 'http://127.0.0.1:11434/v1'
+                    elif not base_url.endswith('/v1'):
+                        # 如果 base_url 不包含 /v1，添加它
+                        base_url = base_url.rstrip('/') + '/v1'
+                    
+                    logger.info(f"初始化 Ollama GPT: base_url={base_url}, model={model}")
+                    self.gpt = OpenAIGPT(
+                        api_key=api_key or 'ollama',  # Ollama 不需要真实的 API key
+                        base_url=base_url,
+                        model=model
+                    )
+                else:
+                    # 其他提供商使用 OpenAI 兼容接口
+                    logger.info(f"初始化 {provider} GPT: model={model}")
+                    self.gpt = OpenAIGPT(
+                        api_key=api_key,
+                        base_url=base_url,
+                        model=model
+                    )
+            else:
+                # 使用默认配置
+                logger.warning("未提供模型配置，使用默认配置")
+                self.gpt = OpenAIGPT()
         return self.gpt
     
     def generate(
@@ -67,6 +104,13 @@ class NoteGenerator:
             # 3. GPT 生成笔记
             update_task_status(task_id, "summarizing")
             markdown = self._summarize_text(transcript, filename, task_id, screenshot)
+            
+            # 清理 AI 输出中的思考过程标签（redacted_reasoning）
+            import re
+            markdown = re.sub(r'<think>.*?</think>', '', markdown, flags=re.DOTALL | re.IGNORECASE)
+            markdown = re.sub(r'<think>[\s\S]*?</think>', '', markdown, flags=re.IGNORECASE)
+            # 清理多余的空白行
+            markdown = re.sub(r'\n\s*\n\s*\n', '\n\n', markdown)
             
             # 4. 后处理：插入截图
             if screenshot:
@@ -187,6 +231,15 @@ class NoteGenerator:
         gpt = self._get_gpt()
         markdown = gpt.summarize(transcript, filename, screenshot)
         
+        # 清理 AI 输出中的思考过程标签（redacted_reasoning）
+        # 删除所有 <think>...</think> 标签及其内容
+        import re
+        markdown = re.sub(r'<think>.*?</think>', '', markdown, flags=re.DOTALL | re.IGNORECASE)
+        # 也处理可能的多行格式
+        markdown = re.sub(r'<think>[\s\S]*?</think>', '', markdown, flags=re.IGNORECASE)
+        # 清理多余的空白行
+        markdown = re.sub(r'\n\s*\n\s*\n', '\n\n', markdown)
+        
         # 保存缓存
         cache_file.write_text(markdown, encoding='utf-8')
         
@@ -223,15 +276,8 @@ class NoteGenerator:
             try:
                 img_path = generate_screenshot(str(video_path), str(IMAGE_OUTPUT_DIR), timestamp, idx)
                 filename = Path(img_path).name
-                # 构建前端可访问的 URL（截图在 note_results/screenshots 目录下）
-                # 强制使用新路径，绝对不使用 /static/screenshots/
+                # 直接生成正确的 URL（截图在 note_results/screenshots 目录下）
                 img_url = f"{IMAGE_BASE_URL.rstrip('/')}/{filename}"
-                # 双重验证：确保路径正确
-                if '/static/screenshots/' in img_url:
-                    logger.error(f"❌ 错误：生成的图片 URL 包含旧路径: {img_url}")
-                    img_url = f"/api/note_results/screenshots/{filename}"
-                    logger.info(f"✓ 已修正为: {img_url}")
-                logger.info(f"生成图片 URL: {img_url} (文件: {filename})")
                 
                 # 智能替换：在标记所在位置插入图片，保持原有结构
                 # 处理带 * 的标记

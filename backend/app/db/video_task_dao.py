@@ -70,3 +70,22 @@ def get_all_tasks(limit: int = 50):
     finally:
         db.close()
 
+
+def delete_task_by_id(task_id: str) -> bool:
+    """根据 task_id 删除任务"""
+    db = SessionLocal()
+    try:
+        task = db.query(VideoTask).filter(VideoTask.task_id == task_id).first()
+        if task:
+            db.delete(task)
+            db.commit()
+            logger.info(f"任务 {task_id} 已从数据库删除")
+            return True
+        return False
+    except Exception as e:
+        db.rollback()
+        logger.error(f"删除任务失败: {e}")
+        raise
+    finally:
+        db.close()
+

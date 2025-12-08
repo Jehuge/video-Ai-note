@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
-import { CheckCircle2, XCircle, Loader2, Clock, Eye } from 'lucide-react'
+import { useEffect, useState, useRef } from 'react'
+import { CheckCircle2, XCircle, Loader2, Clock, Trash2 } from 'lucide-react'
 import { useTaskStore } from '../store/taskStore'
-import { getTasks } from '../services/api'
-import TaskDetailPanel from './TaskDetailPanel'
+import { getTasks, deleteTask } from '../services/api'
+import toast from 'react-hot-toast'
 
 const statusIcons = {
   completed: <CheckCircle2 className="w-4 h-4 text-green-500" />,
@@ -23,12 +23,19 @@ const statusText = {
 }
 
 export default function TaskList() {
-  const { tasks, currentTaskId, setCurrentTask, loadTasks } = useTaskStore()
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
+  const { tasks, currentTaskId, setCurrentTask, loadTasks, removeTask } = useTaskStore()
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set())
+  const tasksLoadedRef = useRef(false)
 
   // 加载任务列表
   useEffect(() => {
+    // 防止重复加载
+    if (tasksLoadedRef.current) {
+      return
+    }
+
     const loadTaskList = async () => {
+      tasksLoadedRef.current = true
       try {
         const response = await getTasks()
         if (response.data.code === 200) {
@@ -47,38 +54,73 @@ export default function TaskList() {
         if (error.code !== 'ECONNREFUSED' && error.code !== 'ERR_CONNECTION_TIMED_OUT') {
           console.warn('无法连接到后端服务，请确保后端已启动')
         }
+        // 加载失败时重置标记，允许重试
+        tasksLoadedRef.current = false
       }
     }
 
     loadTaskList()
   }, [loadTasks])
 
+  const handleDelete = async (taskId: string, e: React.MouseEvent) => {
+    e.stopPropagation() // 阻止触发任务选择
+    
+    const task = tasks.find(t => t.id === taskId)
+    const taskName = task?.filename || '任务'
+    
+    if (!window.confirm(`确定要删除 "${taskName}" 吗？\n\n删除后将无法恢复，包括：\n- 任务记录\n- 上传的文件\n- 生成的笔记和转写结果\n- 相关截图`)) {
+      return
+    }
+
+    setDeletingIds((prev) => new Set(prev).add(taskId))
+    
+    try {
+      const response = await deleteTask(taskId)
+      if (response.data.code === 200) {
+        removeTask(taskId)
+        toast.success('任务删除成功')
+      } else {
+        toast.error(response.data.msg || '删除失败')
+      }
+    } catch (error: any) {
+      console.error('删除任务失败:', error)
+      toast.error(error.response?.data?.msg || '删除失败，请稍后重试')
+    } finally {
+      setDeletingIds((prev) => {
+        const newSet = new Set(prev)
+        newSet.delete(taskId)
+        return newSet
+      })
+    }
+  }
+
   return (
-    <div className="bg-white rounded-lg shadow-md p-6">
-      <h2 className="text-xl font-semibold mb-4">任务列表</h2>
-      
+    <div className="p-4">
       {tasks.length === 0 ? (
-        <p className="text-gray-400 text-sm text-center py-8">暂无任务</p>
+        <div className="text-center py-12">
+          <p className="text-gray-400 text-sm">暂无任务</p>
+          <p className="text-xs text-gray-400 mt-2">上传文件后任务将显示在这里</p>
+        </div>
       ) : (
-        <div className="space-y-2 max-h-96 overflow-y-auto">
+        <div className="space-y-2">
           {tasks.map((task) => (
             <div
               key={task.id}
-              className={`p-3 rounded-lg transition-colors ${
+              className={`p-3 rounded-lg transition-all cursor-pointer border ${
                 currentTaskId === task.id
-                  ? 'bg-blue-50 border-2 border-blue-500'
-                  : 'bg-gray-50 border-2 border-transparent'
+                  ? 'bg-blue-50 border-blue-500 shadow-sm'
+                  : 'bg-white border-gray-200 hover:border-gray-300 hover:shadow-sm'
               }`}
+              onClick={() => {
+                setCurrentTask(task.id)
+              }}
             >
-              <div className="flex items-start justify-between">
-                <div
-                  className="flex-1 min-w-0 cursor-pointer"
-                  onClick={() => setCurrentTask(task.id)}
-                >
-                  <p className="text-sm font-medium text-gray-900 truncate">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-900 truncate mb-1.5">
                     {task.filename}
                   </p>
-                  <div className="flex items-center gap-2 mt-1">
+                  <div className="flex items-center gap-2">
                     {statusIcons[task.status]}
                     <span className="text-xs text-gray-500">
                       {statusText[task.status]}
@@ -86,24 +128,22 @@ export default function TaskList() {
                   </div>
                 </div>
                 <button
-                  onClick={() => setSelectedTaskId(task.id)}
-                  className="ml-2 p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                  title="查看详情"
+                  onClick={(e) => handleDelete(task.id, e)}
+                  disabled={deletingIds.has(task.id)}
+                  className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="删除任务"
                 >
-                  <Eye className="w-4 h-4" />
+                  {deletingIds.has(task.id) ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="w-4 h-4" />
+                  )}
                 </button>
               </div>
             </div>
           ))}
         </div>
       )}
-      {selectedTaskId && (
-        <TaskDetailPanel
-          taskId={selectedTaskId}
-          onClose={() => setSelectedTaskId(null)}
-        />
-      )}
     </div>
   )
 }
-

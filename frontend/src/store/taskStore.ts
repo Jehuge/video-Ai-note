@@ -15,6 +15,7 @@ interface TaskStore {
   updateTask: (id: string, updates: Partial<Task>) => void
   setCurrentTask: (id: string | null) => void
   loadTasks: (tasks: Task[]) => void
+  removeTask: (id: string) => void
 }
 
 export const useTaskStore = create<TaskStore>((set) => ({
@@ -39,5 +40,16 @@ export const useTaskStore = create<TaskStore>((set) => ({
   
   loadTasks: (tasks) =>
     set({ tasks }),
+  
+  removeTask: (id) =>
+    set((state) => {
+      const newTasks = state.tasks.filter((task) => task.id !== id)
+      // 如果删除的是当前选中的任务，清除选中状态
+      const newCurrentTaskId = state.currentTaskId === id ? null : state.currentTaskId
+      return {
+        tasks: newTasks,
+        currentTaskId: newCurrentTaskId,
+      }
+    }),
 }))
 

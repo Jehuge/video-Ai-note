@@ -14,11 +14,22 @@ const api = axios.create({
 export const uploadVideo = async (
   file: File,
   screenshot: boolean = false,
+  modelConfig: {
+    provider: string
+    api_key: string
+    base_url?: string
+    model: string
+  } | null = null,
   onProgress?: (progress: number) => void
 ) => {
   const formData = new FormData()
   formData.append('file', file)
   formData.append('screenshot', screenshot.toString())
+  
+  // 如果提供了模型配置，添加到请求中
+  if (modelConfig) {
+    formData.append('model_config', JSON.stringify(modelConfig))
+  }
   
   const response = await api.post('/upload', formData, {
     headers: {
@@ -55,6 +66,75 @@ export const confirmStep = async (taskId: string, step: string) => {
 
 // 重新生成笔记
 export const regenerateNote = async (taskId: string) => {
-  return await api.post(`/task/${taskId}/regenerate`)
+  // 获取当前选择的模型配置
+  const selectedModelId = localStorage.getItem('selectedModel')
+  const modelConfigs = localStorage.getItem('modelConfigs')
+  
+  let modelConfig = null
+  if (selectedModelId && modelConfigs) {
+    try {
+      const configs = JSON.parse(modelConfigs)
+      // 从 selectedModelId 中提取 provider 和 modelId
+      const firstDashIndex = selectedModelId.indexOf('-')
+      if (firstDashIndex > 0) {
+        const provider = selectedModelId.substring(0, firstDashIndex)
+        const modelId = selectedModelId.substring(firstDashIndex + 1)
+        const providerConfig = configs[provider]
+        
+        if (providerConfig) {
+          modelConfig = {
+            provider,
+            api_key: providerConfig.apiKey || '',
+            base_url: providerConfig.baseUrl || '',
+            model: modelId,
+          }
+          console.log('重新生成时使用的模型配置:', modelConfig)
+        }
+      }
+    } catch (e) {
+      console.error('解析模型配置失败:', e)
+    }
+  }
+  
+  // 将模型配置作为请求体传递（使用驼峰命名）
+  return await api.post(`/task/${taskId}/regenerate`, {
+    modelConfig: modelConfig
+  })
+}
+
+// 获取模型列表
+export const getModelList = async (config: {
+  provider: string
+  api_key: string
+  base_url?: string
+}) => {
+  return await api.post('/models/list', config)
+}
+
+// 测试模型连接
+export const testModelConnection = async (config: {
+  provider: string
+  api_key: string
+  base_url?: string
+}) => {
+  return await api.post('/models/test', config)
+}
+
+// 获取提供商列表
+export const getProviders = async () => {
+  return await api.get('/providers')
+}
+
+// 删除任务
+export const deleteTask = async (taskId: string) => {
+  return await api.delete(`/task/${taskId}`)
+}
+
+// 导出 PDF（可复制文本）
+export const exportPDF = async (taskId: string) => {
+  const response = await api.get(`/task/${taskId}/export_pdf`, {
+    responseType: 'blob',
+  })
+  return response
 }
 

@@ -10,6 +10,7 @@ interface Step {
   canConfirm?: boolean
   onConfirm?: () => void
   result?: any
+  onClick?: () => void
 }
 
 interface StepProgressProps {
@@ -53,7 +54,8 @@ export default function StepProgress({ steps, currentStep }: StepProgressProps) 
             className={`border-2 rounded-lg p-4 transition-all ${getStepColor(
               step.status,
               isCurrent
-            )}`}
+            )} ${step.onClick ? 'cursor-pointer hover:shadow-md' : ''}`}
+            onClick={step.onClick}
           >
             <div className="flex items-start gap-3">
               <div className="flex-shrink-0 mt-0.5">{getStepIcon(step.status)}</div>
@@ -104,4 +106,5 @@ export default function StepProgress({ steps, currentStep }: StepProgressProps) 
     </div>
   )
 }
+
 

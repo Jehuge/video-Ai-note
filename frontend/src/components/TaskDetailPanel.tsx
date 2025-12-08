@@ -105,11 +105,19 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
     updateTaskRef.current = updateTask
   }, [tasks, updateTask])
 
+  const taskDetailLoadedRef = useRef<string | null>(null)
+
   // 初始加载任务详情
   useEffect(() => {
     if (!taskId) return
     
+    // 防止重复加载同一个任务
+    if (taskDetailLoadedRef.current === taskId) {
+      return
+    }
+    
     const loadTaskDetail = async () => {
+      taskDetailLoadedRef.current = taskId
       try {
         const response = await getTaskStatus(taskId)
         if (response.data.code === 200) {
@@ -130,6 +138,10 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
         }
       } catch (error) {
         console.error('加载任务详情失败:', error)
+        // 加载失败时重置标记，允许重试
+        if (taskDetailLoadedRef.current === taskId) {
+          taskDetailLoadedRef.current = null
+        }
       }
     }
     
@@ -337,7 +349,7 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
               {(() => {
                 // 优先显示笔记（如果存在且已完成）
                 if (task.markdown && (task.status === 'completed' || task.markdown.length > 0)) {
-                  return <EnhancedMarkdownViewer markdown={task.markdown} filename={task.filename} />
+                  return <EnhancedMarkdownViewer markdown={task.markdown} filename={task.filename} taskId={taskId} />
                 }
                 
                 // 其次显示转写结果（如果存在）

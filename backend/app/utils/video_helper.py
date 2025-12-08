@@ -47,3 +47,5 @@ def generate_screenshot(video_path: str, output_dir: str, timestamp: int, index:
         logger.error(f"生成截图失败: {e.stderr}")
         raise Exception(f"生成截图失败: {e.stderr}")
 
+
+

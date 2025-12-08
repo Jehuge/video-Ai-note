@@ -1,0 +1,53 @@
+# 环境变量和敏感信息
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+*.p12
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+
+# 上传文件和输出结果
+uploads/
+note_results/
+static/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Node
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+logs/
+

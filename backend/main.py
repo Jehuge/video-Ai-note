@@ -62,8 +62,9 @@ app.add_middleware(
 register_exception_handlers(app)
 
 # 静态文件服务
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+# 使用 /api/uploads 以匹配前端的 vite proxy 配置
+app.mount("/api/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+app.mount("/api/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # note_results 目录服务（包含截图）
 NOTE_OUTPUT_DIR = os.getenv("NOTE_OUTPUT_DIR", "note_results")

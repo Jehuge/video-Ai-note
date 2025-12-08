@@ -59,6 +59,42 @@ export default function UploadForm() {
   const handleConfirmUpload = async (screenshot: boolean) => {
     if (!selectedFile) return
 
+    // 获取当前选择的模型配置
+    const selectedModelId = localStorage.getItem('selectedModel')
+    const modelConfigs = localStorage.getItem('modelConfigs')
+    
+    let modelConfig = null
+    if (selectedModelId && modelConfigs) {
+      try {
+        const configs = JSON.parse(modelConfigs)
+        // 从 selectedModelId 中提取 provider 和 modelId
+        // selectedModelId 格式: "provider-modelId"
+        // 找到第一个 '-' 的位置，前面是 provider，后面是 modelId
+        const firstDashIndex = selectedModelId.indexOf('-')
+        if (firstDashIndex > 0) {
+          const provider = selectedModelId.substring(0, firstDashIndex)
+          const modelId = selectedModelId.substring(firstDashIndex + 1)
+          const providerConfig = configs[provider]
+          
+          if (providerConfig) {
+            // 使用从 selectedModelId 解析出来的 modelId
+            // 这是用户实际选择的模型
+            modelConfig = {
+              provider,
+              api_key: providerConfig.apiKey || '',
+              base_url: providerConfig.baseUrl || '',
+              model: modelId, // 使用从 selectedModelId 解析的 modelId
+            }
+            console.log('上传时使用的模型配置:', modelConfig)
+          }
+        }
+      } catch (e) {
+        console.error('解析模型配置失败:', e)
+      }
+    } else {
+      console.warn('未选择模型或模型配置不存在')
+    }
+
     setShowConfirm(false)
     setUploading(true)
     setUploadProgress(0)
@@ -67,6 +103,7 @@ export default function UploadForm() {
       const response = await uploadVideo(
         selectedFile,
         screenshot,
+        modelConfig,
         (progress) => {
           setUploadProgress(progress)
         }
@@ -108,10 +145,8 @@ export default function UploadForm() {
 
   return (
     <>
-      <div className="bg-white rounded-lg shadow-md p-6">
-        <h2 className="text-xl font-semibold mb-4">上传视频</h2>
-
-        <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+      <div>
+        <label className="flex flex-col items-center justify-center w-full h-40 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 hover:bg-blue-50/50 transition-all bg-white shadow-sm">
           {uploading ? (
             <div className="flex flex-col items-center w-full px-4">
               <Loader2 className="w-8 h-8 animate-spin text-blue-500 mb-2" />
