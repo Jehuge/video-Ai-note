@@ -11,6 +11,7 @@ from app.models.notes_model import NoteResult
 from app.transcriber.transcriber_provider import get_transcriber
 from app.utils.logger import get_logger
 from app.utils.video_helper import generate_screenshot
+from app.utils.ffmpeg_helper import get_ffmpeg_path
 
 logger = get_logger(__name__)
 
@@ -139,8 +140,9 @@ class NoteGenerator:
         
         try:
             # 使用 ffmpeg 命令提取音频
+            ffmpeg_path = get_ffmpeg_path()
             command = [
-                "ffmpeg",
+                ffmpeg_path,
                 "-i", str(video_path),
                 "-acodec", "pcm_s16le",
                 "-ac", "1",

@@ -28,6 +28,9 @@ uploads/
 note_results/
 static/
 
+# FFmpeg binaries (auto-downloaded)
+ffmpeg_bin/
+
 # Logs
 *.log
 

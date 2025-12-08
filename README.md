@@ -50,9 +50,18 @@
 
 - Python 3.8+
 - Node.js 18+
-- FFmpeg（用于视频处理）
+- FFmpeg（可选，会自动下载）
 
-安装 FFmpeg：
+**关于 FFmpeg：**
+
+项目会自动处理 FFmpeg 的安装和使用：
+- 如果系统已安装 FFmpeg，会优先使用系统版本
+- 如果没有安装，首次运行时会自动下载 FFmpeg 到项目目录（`backend/ffmpeg_bin/`）
+- 使用 `imageio-ffmpeg` 包自动管理 FFmpeg 二进制文件
+
+**手动安装 FFmpeg（可选）：**
+
+如果你想使用系统级别的 FFmpeg，可以手动安装：
 
 ```bash
 # Mac
@@ -186,6 +195,7 @@ video-Ai-note/
    - 添加视频预览功能
    - 改进模型配置界面
    - 优化任务管理流程
+   - **自动管理 FFmpeg**：无需手动安装，首次运行自动下载
 4. **性能优化**：
    - 修复了重复 API 请求问题
    - 优化了组件渲染性能
@@ -193,10 +203,11 @@ video-Ai-note/
 ## 注意事项
 
 - 必须使用 Python 虚拟环境（推荐使用启动脚本自动管理）
-- 需要安装 FFmpeg 用于视频处理
+- FFmpeg 会自动下载到项目目录，无需手动安装
 - 首次运行会自动创建数据库
 - 上传的视频文件会保存在 `backend/uploads` 目录
 - 生成的笔记和截图会保存在 `backend/note_results` 目录
+- FFmpeg 二进制文件会保存在 `backend/ffmpeg_bin/` 目录（自动创建）
 - 详细虚拟环境使用指南请查看 [VENV_GUIDE.md](backend/VENV_GUIDE.md)
 
 ## 致谢
