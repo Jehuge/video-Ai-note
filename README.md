@@ -1,16 +1,6 @@
 # Video AI Note
 
-基于 [BiliNote](https://github.com/JefferyHcool/BiliNote) 项目的二次开发版本，专注于视频笔记生成功能。
-
-## 项目说明
-
-本项目是基于 BiliNote 的简化版本，保留了核心的视频笔记生成功能，并进行了以下改进：
-
-- 简化了项目结构，专注于本地视频文件处理
-- 优化了用户界面和交互体验
-- 改进了 Markdown 和 PDF 导出功能
-- 添加了视频预览功能
-- 优化了模型配置和管理
+一个智能视频笔记生成工具，支持自动提取视频音频、转写文字，并使用 AI 生成结构化笔记。
 
 ## 功能特性
 
@@ -44,22 +34,19 @@
 - react-markdown - Markdown 渲染
 - jsPDF + html2canvas - PDF 生成（前端备用方案）
 
-## 快速开始
-
-### 前置要求
+## 前置要求
 
 - Python 3.8+
 - Node.js 18+
 - FFmpeg（可选，会自动下载）
 
-**关于 FFmpeg：**
+### FFmpeg 说明
 
 项目会自动处理 FFmpeg 的安装和使用：
+
 - 如果系统已安装 FFmpeg，会优先使用系统版本
 - 如果没有安装，首次运行时会自动下载 FFmpeg 到项目目录（`backend/ffmpeg_bin/`）
 - 使用 `imageio-ffmpeg` 包自动管理 FFmpeg 二进制文件
-
-**手动安装 FFmpeg（可选）：**
 
 如果你想使用系统级别的 FFmpeg，可以手动安装：
 
@@ -74,9 +61,11 @@ sudo apt install ffmpeg
 # 从 https://ffmpeg.org/download.html 下载安装
 ```
 
-### 1. 配置后端
+## 安装
 
-**方式一：使用启动脚本（推荐）**
+### 后端配置
+
+#### 方式一：使用启动脚本（推荐）
 
 启动脚本会自动创建和激活虚拟环境：
 
@@ -91,7 +80,7 @@ chmod +x start.sh
 start.bat
 ```
 
-**方式二：手动配置**
+#### 方式二：手动配置
 
 ```bash
 cd backend
@@ -110,12 +99,24 @@ pip install --upgrade pip
 
 # 安装依赖
 pip install -r requirements.txt
-
-# 创建 .env 文件（可选）
-# 如果需要配置环境变量，可以创建 .env 文件
 ```
 
-### 2. 启动后端
+### 前端配置
+
+```bash
+cd frontend
+
+# 安装依赖
+npm install
+# 或
+pnpm install
+# 或
+yarn install
+```
+
+## 使用
+
+### 启动后端
 
 如果使用启动脚本，直接运行即可。如果手动配置，需要先激活虚拟环境：
 
@@ -129,17 +130,10 @@ python main.py
 
 后端将在 `http://localhost:8483` 启动
 
-### 3. 配置并启动前端
+### 启动前端
 
 ```bash
 cd frontend
-
-# 安装依赖
-npm install
-# 或
-pnpm install
-# 或
-yarn install
 
 # 启动开发服务器
 npm run dev
@@ -149,7 +143,7 @@ pnpm dev
 
 前端将在 `http://localhost:5173` 启动
 
-### 4. 使用
+### 使用流程
 
 1. 打开浏览器访问 `http://localhost:5173`
 2. 在"模型配置"页面配置你的 AI 模型（OpenAI/DeepSeek/Qwen/Ollama 等）
@@ -182,24 +176,6 @@ video-Ai-note/
         └── store/     # 状态管理
 ```
 
-## 主要改进
-
-相比原项目 BiliNote，本版本的主要改进包括：
-
-1. **简化架构**：移除了多平台下载功能，专注于本地文件处理
-2. **改进导出**：
-   - Markdown 导出时图片自动转换为 base64 嵌入
-   - PDF 导出支持可复制文本格式（使用 reportlab）
-   - 优化了 PDF 分页，避免图片截断
-3. **增强功能**：
-   - 添加视频预览功能
-   - 改进模型配置界面
-   - 优化任务管理流程
-   - **自动管理 FFmpeg**：无需手动安装，首次运行自动下载
-4. **性能优化**：
-   - 修复了重复 API 请求问题
-   - 优化了组件渲染性能
-
 ## 注意事项
 
 - 必须使用 Python 虚拟环境（推荐使用启动脚本自动管理）
@@ -209,10 +185,6 @@ video-Ai-note/
 - 生成的笔记和截图会保存在 `backend/note_results` 目录
 - FFmpeg 二进制文件会保存在 `backend/ffmpeg_bin/` 目录（自动创建）
 - 详细虚拟环境使用指南请查看 [VENV_GUIDE.md](backend/VENV_GUIDE.md)
-
-## 致谢
-
-本项目基于 [BiliNote](https://github.com/JefferyHcool/BiliNote) 项目进行二次开发，感谢原项目的贡献者。
 
 ## 许可证
 
