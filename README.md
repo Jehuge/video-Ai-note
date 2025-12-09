@@ -203,7 +203,3 @@ video-Ai-note/
 - 生成的笔记和截图会保存在 `backend/note_results` 目录
 - FFmpeg 二进制文件会保存在 `backend/ffmpeg_bin/` 目录（自动创建）
 - 详细虚拟环境使用指南请查看 [VENV_GUIDE.md](backend/VENV_GUIDE.md)
-
-## 许可证
-
-本项目遵循原项目的许可证协议。
