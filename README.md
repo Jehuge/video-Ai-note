@@ -18,32 +18,6 @@
 - 多模型配置支持
 - 截图自动插入（可选）
 
-## 技术栈
-
-### 后端
-
-- FastAPI - Web 框架
-- SQLite - 数据库（本地存储）
-- fast-whisper - 音频转文字（本地运行）
-- AI 模型集成 - 支持 OpenAI/DeepSeek/Qwen API 和 Ollama 本地模型
-- reportlab - PDF 生成
-- markdown - Markdown 处理
-
-### 前端
-
-- React + TypeScript
-- Vite - 构建工具
-- Tailwind CSS - 样式框架
-- Zustand - 状态管理
-- react-markdown - Markdown 渲染
-- jsPDF + html2canvas - PDF 生成（前端备用方案）
-
-## 前置要求
-
-- Python 3.8+
-- Node.js 18+
-- FFmpeg（可选，会自动下载）
-
 ### FFmpeg 说明
 
 项目会自动处理 FFmpeg 的安装和使用：
@@ -166,15 +140,16 @@ pnpm dev
 如需完全离线运行，推荐使用 Ollama 本地模型：
 
 1. **安装 Ollama**（如果尚未安装）：
+
    ```bash
    # Mac/Linux
    curl -fsSL https://ollama.com/install.sh | sh
-   
+
    # Windows
    # 从 https://ollama.com/download 下载安装
    ```
-
 2. **下载模型**（推荐 4B 参数模型，性能与速度平衡）：
+
    ```bash
    # 下载 4B 模型示例
    ollama pull llama3.2:3b
@@ -183,13 +158,14 @@ pnpm dev
    # 或
    ollama pull phi3:mini
    ```
-
 3. **在模型配置中选择 Ollama**：
+
    - 模型类型选择 "Ollama"
    - 模型名称填写你下载的模型（如 `llama3.2:3b`）
    - API 地址默认为 `http://localhost:11434`（Ollama 默认端口）
 
 **优势**：
+
 - 完全离线运行，无需网络连接
 - 数据不上传，保护隐私
 - 无需 API 密钥，无使用费用
