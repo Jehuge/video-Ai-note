@@ -41,92 +41,123 @@ async def start_bilibili_login():
     使用 Playwright 打开哔哩哔哩登录页面，截取二维码并返回 base64 图片以及 session_id。
     后续客户端应定期轮询 /download/bilibili/login_status?session_id=... 来检查是否登录成功。
     """
+    # 将整个启动流程外层捕获异常并记录，方便定位导致 500 的问题
     try:
-        from playwright.async_api import async_playwright
-    except Exception as e:
-        logger.error("Playwright 未安装: %s", e)
-        raise HTTPException(status_code=500, detail="服务器未安装 playwright，请安装并运行 'playwright install' 后重试")
-
-    session_id = uuid.uuid4().hex
-    tmpdir = Path(tempfile.mkdtemp(prefix=f"bili_login_{session_id}_"))
-    qr_path = tmpdir / "qr.png"
-    storage_path = tmpdir / "storage_state.json"
-
-    async def _login_task():
         try:
-            async with async_playwright() as pw:
-                browser = await pw.chromium.launch(headless=False)
-                context = await browser.new_context()
-                page = await context.new_page()
-                await page.goto("https://passport.bilibili.com/login")
-
-                # 等待二维码元素出现并截图
-                try:
-                    qr_el = await page.wait_for_selector("img.qrcode-img, img[data-type='qrcode']", timeout=15000)
-                except Exception:
-                    # 有时候页面需要点击“二维码登录”切换
-                    try:
-                        btn = await page.query_selector("a[href*='qrcode']")
-                        if btn:
-                            await btn.click()
-                            qr_el = await page.wait_for_selector("img.qrcode-img, img[data-type='qrcode']", timeout=10000)
-                        else:
-                            qr_el = None
-                    except Exception:
-                        qr_el = None
-
-                if qr_el:
-                    await qr_el.screenshot(path=str(qr_path))
-                else:
-                    # fallback：截图整个页面
-                    await page.screenshot(path=str(qr_path), full_page=False)
-
-                # 轮询等待登录完成（检查是否存在登录用户的 cookie）
-                logged_in = False
-                for _ in range(180):  # 最多等待 ~180*1s = 3分钟
-                    cookies = await context.cookies()
-                    # 寻找 bilibili 的 sessdata 或 buvid3 等
-                    if any(c.get("name", "").lower() in ("sessdata", "bili_jct", "buvid3") for c in cookies):
-                        logged_in = True
-                        await context.storage_state(path=str(storage_path))
-                        break
-                    await asyncio.sleep(1)
-
-                # 关闭浏览器
-                await browser.close()
-                # 标记会话
-                _login_sessions[session_id]["finished"] = logged_in
-                if logged_in:
-                    _login_sessions[session_id]["storage"] = str(storage_path)
-                else:
-                    _login_sessions[session_id]["storage"] = None
+            from playwright.async_api import async_playwright
         except Exception as e:
-            logger.exception("Playwright 登录任务失败: %s", e)
-            _login_sessions[session_id]["error"] = str(e)
+            logger.error("Playwright 未安装: %s", e)
+            raise HTTPException(status_code=500, detail="服务器未安装 playwright，请安装并运行 'playwright install' 后重试")
 
-    # 保存会话元信息并启动后台任务
-    _login_sessions[session_id] = {
-        "tmpdir": str(tmpdir),
-        "qr_path": str(qr_path),
-        "storage": None,
-        "finished": False,
-        "error": None,
-    }
+        session_id = uuid.uuid4().hex
+        tmpdir = Path(tempfile.mkdtemp(prefix=f"bili_login_{session_id}_"))
+        qr_path = tmpdir / "qr.png"
+        storage_path = tmpdir / "storage_state.json"
 
-    # 启动播放（后台任务）
-    asyncio.create_task(_login_task())
+        async def _login_task():
+            try:
+                async with async_playwright() as pw:
+                    # 支持通过环境变量切换 headless（默认 True，服务器通常没有显示器）
+                    headless_env = os.getenv("BILI_PLAYWRIGHT_HEADLESS", "0").lower()
+                    headless = not (headless_env in ("0", "false", "no"))
+                    browser = await pw.chromium.launch(headless=headless)
+                    context = await browser.new_context()
+                    page = await context.new_page()
+                    await page.goto("https://passport.bilibili.com/login")
 
-    # 等待短暂时间让 qr.png 生成
-    for _ in range(20):
-        if qr_path.exists():
-            break
-        await asyncio.sleep(0.2)
+                    # 等待二维码元素出现并截图
+                    try:
+                        qr_el = await page.wait_for_selector("img.qrcode-img, img[data-type='qrcode']", timeout=15000)
+                    except Exception:
+                        # 有时候页面需要点击“二维码登录”切换
+                        try:
+                            btn = await page.query_selector("a[href*='qrcode']")
+                            if btn:
+                                await btn.click()
+                                qr_el = await page.wait_for_selector("img.qrcode-img, img[data-type='qrcode']", timeout=10000)
+                            else:
+                                qr_el = None
+                        except Exception:
+                            qr_el = None
 
-    if not qr_path.exists():
-        raise HTTPException(status_code=500, detail="无法生成二维码图片，请检查 Playwright 是否可用")
+                    if qr_el:
+                        await qr_el.screenshot(path=str(qr_path))
+                    else:
+                        # fallback：截图整个页面
+                        await page.screenshot(path=str(qr_path), full_page=False)
 
-    b64 = base64.b64encode(qr_path.read_bytes()).decode("utf-8")
-    return {"session_id": session_id, "qr_image_base64": b64}
+                    # 轮询等待登录完成（检查是否存在登录用户的 cookie）
+                    logged_in = False
+                    for _ in range(180):  # 最多等待 ~180*1s = 3分钟
+                        cookies = await context.cookies()
+                        cookie_names = {c.get("name", "").lower() for c in cookies}
+                        # 要避免误判，仅在至少有 sessdata（哔哩哔哩关键登录 cookie）时认为已登录
+                        if "sessdata" in cookie_names:
+                            logged_in = True
+                            # 仅保存 storage_state 到文件（不在日志中输出 cookie 内容）
+                            await context.storage_state(path=str(storage_path))
+                            break
+                        await asyncio.sleep(1)
+
+                    # 关闭浏览器
+                    await browser.close()
+                    # 标记会话
+                    _login_sessions[session_id]["finished"] = logged_in
+                    if logged_in:
+                        _login_sessions[session_id]["storage"] = str(storage_path)
+                    else:
+                        _login_sessions[session_id]["storage"] = None
+            except Exception as e:
+                logger.exception("Playwright 登录任务失败: %s", e)
+                _login_sessions[session_id]["error"] = str(e)
+
+        # 保存会话元信息并启动后台任务
+        _login_sessions[session_id] = {
+            "tmpdir": str(tmpdir),
+            "qr_path": str(qr_path),
+            "storage": None,
+            "finished": False,
+            "error": None,
+        }
+
+        # 启动播放（后台任务）
+        asyncio.create_task(_login_task())
+
+        # 等待一段时间让 qr.png 生成（最长等待 15 秒），并在任务出错时提前返回错误信息
+        for _ in range(75):  # 75 * 0.2 = 15s
+            if qr_path.exists():
+                break
+            # 如果后台任务已记录错误，返回详细信息
+            sess_info = _login_sessions.get(session_id)
+            if sess_info and sess_info.get("error"):
+                raise HTTPException(status_code=500, detail=f"启动登录任务失败: {sess_info.get('error')}")
+            await asyncio.sleep(0.2)
+
+        if not qr_path.exists():
+            # 如果没有生成二维码，记录更多调试信息（但不记录敏感 cookie）
+            sess_info = _login_sessions.get(session_id, {})
+            err = sess_info.get("error") or "无法生成二维码图片，请检查 Playwright 是否可用或环境是否允许打开浏览器"
+            try:
+                logger.error("start_bilibili_login: 未生成二维码，session=%s tmpdir=%s error=%s", session_id, sess_info.get("tmpdir"), sess_info.get("error"))
+                td = Path(sess_info.get("tmpdir") or "")
+                if td.exists() and td.is_dir():
+                    contents = [p.name for p in td.iterdir()]
+                    logger.error("start_bilibili_login: tmpdir 内容: %s", contents)
+                else:
+                    logger.error("start_bilibili_login: tmpdir 不存在或不可访问: %s", td)
+            except Exception:
+                logger.exception("记录 tmpdir 内容时出错")
+            raise HTTPException(status_code=500, detail=err)
+
+        b64 = base64.b64encode(qr_path.read_bytes()).decode("utf-8")
+        return {"session_id": session_id, "qr_image_base64": b64}
+    except HTTPException:
+        # 已是明确的 HTTP 错误，直接抛出，便于前端显示
+        raise
+    except Exception as e:
+        # 捕获其它未处理异常并记录完整堆栈，返回简洁错误给前端
+        logger.exception("start_bilibili_login 未捕获异常: %s", e)
+        raise HTTPException(status_code=500, detail=f"启动登录失败（查看后端日志获取详细信息）")
 
 
 @router.get("/download/bilibili/login_status")
@@ -343,5 +374,24 @@ async def download_bilibili(req: DownloadRequest, background_tasks: BackgroundTa
         logger.exception("合并处理时发生错误: %s", e)
 
     return {"download_url": download_url, "filename": filename, "format_note": selected.get("format_note")}
+
+
+@router.get("/download/bilibili/task_status")
+async def bilibili_task_status(task_id: str):
+    """
+    查询后台下载/合并任务状态，返回：
+    { status: 'pending'|'running'|'completed'|'failed', progress: int, log: str, output: str|null, error: str|null }
+    如果 status == 'completed'，output 为服务器静态路径，例如 /api/uploads/xxx.mp4
+    """
+    task = _download_tasks.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="task_id 未找到")
+    return {
+        "status": task.get("status"),
+        "progress": task.get("progress", 0),
+        "log": task.get("log", ""),
+        "output": task.get("output"),
+        "error": task.get("error"),
+    }
 
 

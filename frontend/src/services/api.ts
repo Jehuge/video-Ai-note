@@ -70,6 +70,11 @@ export const getBilibiliLoginStatus = async (sessionId: string) => {
 
 // （start/login_status 接口由上方函数提供）
 
+// 查询后台合并任务状态
+export const getBilibiliTaskStatus = async (taskId: string) => {
+  return await api.get(`/download/bilibili/task_status?task_id=${taskId}`)
+}
+
 // 获取任务状态
 export const getTaskStatus = async (taskId: string) => {
   return await api.get(`/task/${taskId}`)

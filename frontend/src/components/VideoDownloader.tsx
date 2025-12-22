@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { toast } from 'react-hot-toast'
-import { downloadBilibili, startBilibiliLogin, getBilibiliLoginStatus } from '../services/api'
+import { downloadBilibili, startBilibiliLogin, getBilibiliLoginStatus, getBilibiliTaskStatus } from '../services/api'
 
 export default function VideoDownloader() {
   const [url, setUrl] = useState('')
@@ -13,6 +13,7 @@ export default function VideoDownloader() {
   const [loginFinished, setLoginFinished] = useState(false)
   const [autoDownloadTriggered, setAutoDownloadTriggered] = useState(false)
   const pollRef = useRef<number | null>(null)
+  const taskPollRef = useRef<number | null>(null)
 
   const handleDownload = async () => {
     if (!url) {
@@ -25,11 +26,47 @@ export default function VideoDownloader() {
       // 如果使用扫码登录并已完成，则将 cookie 设为 session:<id>
       const cookieToSend = loginFinished && sessionId ? `session:${sessionId}` : cookie
       const resp = await downloadBilibili(url, cookieToSend, quality)
-      // 期望后端返回 { download_url: string } 或 { message: string, requires_login: boolean }
+      // 如果返回直接 download_url，则打开；如果返回 task_id，则开始轮询任务状态
       if (resp.data && resp.data.download_url) {
-        // 打开下载链接
         window.open(resp.data.download_url, '_blank')
-        toast.success('已打开下载链接，若为分段请等待后端合并完成')
+        toast.success('已打开下载链接')
+      } else if (resp.data && resp.data.task_id) {
+        const taskId = resp.data.task_id
+        toast.loading(`后台合并开始，任务 ${taskId} 已提交`)
+        // 开始轮询任务状态
+        taskPollRef.current = window.setInterval(async () => {
+          try {
+            const st = await getBilibiliTaskStatus(taskId)
+            const data = st.data
+            if (data) {
+              const status = data.status
+              const progress = data.progress || 0
+              if (status === 'running') {
+                toast.loading(`合并进行中：${progress}% (任务 ${taskId})`)
+              } else if (status === 'completed') {
+                if (taskPollRef.current) {
+                  clearInterval(taskPollRef.current)
+                  taskPollRef.current = null
+                }
+                toast.success(`合并完成，正在打开文件`)
+                // 打开静态下载链接
+                if (data.output) {
+                  window.open(data.output, '_blank')
+                } else {
+                  toast.error('合并完成但未返回下载地址')
+                }
+              } else if (status === 'failed') {
+                if (taskPollRef.current) {
+                  clearInterval(taskPollRef.current)
+                  taskPollRef.current = null
+                }
+                toast.error(`合并失败: ${data.error || '未知错误'}`)
+              }
+            }
+          } catch (err) {
+            console.error('task poll error', err)
+          }
+        }, 2000)
       } else if (resp.data && resp.data.message) {
         toast.success(resp.data.message)
       } else {
@@ -83,6 +120,9 @@ export default function VideoDownloader() {
     return () => {
       if (pollRef.current) {
         clearInterval(pollRef.current)
+      }
+      if (taskPollRef.current) {
+        clearInterval(taskPollRef.current)
       }
     }
   }, [])
