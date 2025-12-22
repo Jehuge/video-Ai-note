@@ -20,6 +20,9 @@ router = APIRouter()
 # 用于跟踪登录会话
 _login_sessions: dict = {}
 
+# 用于跟踪下载合并任务
+_download_tasks: dict = {}
+
 
 class DownloadRequest(BaseModel):
     url: str
@@ -252,6 +255,92 @@ async def download_bilibili(req: DownloadRequest, background_tasks: BackgroundTa
     ext = selected.get("ext")
     if ext:
         filename = f"{filename}.{ext}"
+    # 如果下载地址是 m3u8（或协议为 m3u8_native），则尝试使用 yt-dlp 下载并合并为单一文件（保存到 UPLOAD_DIR），然后返回静态 URL
+    try:
+        upload_dir = os.getenv("UPLOAD_DIR", "uploads")
+        Path(upload_dir).mkdir(parents=True, exist_ok=True)
+
+        is_m3u8 = False
+        proto = selected.get("protocol") or ""
+        if proto == "m3u8_native":
+            is_m3u8 = True
+        if download_url and (".m3u8" in download_url or (selected.get("ext") or "") == "m3u8"):
+            is_m3u8 = True
+
+        if is_m3u8:
+            # 输出文件名：使用标题 + uuid，强制 mp4
+            safe_title = "".join(c for c in (info_json.get("title") or "video") if c.isalnum() or c in " _-").strip()[:120] or "video"
+            out_basename = f"{safe_title}_{uuid.uuid4().hex[:8]}.mp4"
+            out_path = os.path.join(upload_dir, out_basename)
+
+            # 构建 yt-dlp 下载命令，使用 --merge-output-format mp4 以确保合并
+            ytdlp_cmd = ["yt-dlp", "-f", "best", "--merge-output-format", "mp4", "-o", out_path, url]
+            if cookies_file:
+                ytdlp_cmd += ["--cookies", cookies_file]
+            elif cookie:
+                ytdlp_cmd += ["--add-header", f"Cookie: {cookie}"]
+
+            # 将下载/合并任务提交为后台任务（非阻塞）
+            task_id = uuid.uuid4().hex
+            _download_tasks[task_id] = {
+                "status": "pending",
+                "progress": 0,
+                "log": "",
+                "output": None,
+                "error": None,
+            }
+
+            def _run_task(tid: str, cmd: list, outp: str, cookiesfile: Optional[str]):
+                try:
+                    _download_tasks[tid]["status"] = "running"
+                    _download_tasks[tid]["log"] += f"执行命令: {' '.join(cmd)}\n"
+                    # 使用 subprocess.Popen 以便实时读取输出并更新日志/进度
+                    with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1) as proc:
+                        for line in proc.stdout:
+                            _download_tasks[tid]["log"] += line
+                            # 简单根据输出判断进度（若包含 %）
+                            try:
+                                if "%" in line:
+                                    # 提取第一个出现的百分比数字
+                                    import re
+                                    m = re.search(r"(\d{1,3}\.\d|\d{1,3})%", line)
+                                    if m:
+                                        p = float(m.group(1))
+                                        _download_tasks[tid]["progress"] = int(min(max(p, 0), 100))
+                            except Exception:
+                                pass
+                        ret = proc.wait()
+                    if ret != 0:
+                        _download_tasks[tid]["status"] = "failed"
+                        _download_tasks[tid]["error"] = f"yt-dlp 退出码 {ret}"
+                        return
+
+                    # 成功后标记输出并返回静态 URL
+                    _download_tasks[tid]["status"] = "completed"
+                    _download_tasks[tid]["output"] = outp
+                except Exception as e:
+                    logger.exception("后台下载任务失败: %s", e)
+                    _download_tasks[tid]["status"] = "failed"
+                    _download_tasks[tid]["error"] = str(e)
+                finally:
+                    # 清理 cookies 临时文件
+                    try:
+                        if cookiesfile and os.path.exists(cookiesfile):
+                            os.remove(cookiesfile)
+                    except Exception:
+                        pass
+
+            # 启动后台线程
+            import threading
+            thread_cmd = ytdlp_cmd.copy()
+            thread = threading.Thread(target=_run_task, args=(task_id, thread_cmd, out_path, cookies_file), daemon=True)
+            thread.start()
+
+            # 返回任务 id，前端可以轮询 /download/bilibili/task_status?task_id=...
+            return {"task_id": task_id, "message": "已开始后台合并，使用 task_id 查询进度"}
+
+    except Exception as e:
+        logger.exception("合并处理时发生错误: %s", e)
 
     return {"download_url": download_url, "filename": filename, "format_note": selected.get("format_note")}
 

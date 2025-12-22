@@ -58,6 +58,18 @@ export const downloadBilibili = async (url: string, cookie: string = '', quality
   })
 }
 
+// 启动 B 站扫码登录，返回 session_id 与二维码 base64
+export const startBilibiliLogin = async () => {
+  return await api.post('/download/bilibili/start_login')
+}
+
+// 查询扫码登录状态
+export const getBilibiliLoginStatus = async (sessionId: string) => {
+  return await api.get(`/download/bilibili/login_status?session_id=${sessionId}`)
+}
+
+// （start/login_status 接口由上方函数提供）
+
 // 获取任务状态
 export const getTaskStatus = async (taskId: string) => {
   return await api.get(`/task/${taskId}`)

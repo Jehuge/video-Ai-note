@@ -1,12 +1,18 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { toast } from 'react-hot-toast'
-import { downloadBilibili } from '../services/api'
+import { downloadBilibili, startBilibiliLogin, getBilibiliLoginStatus } from '../services/api'
 
 export default function VideoDownloader() {
   const [url, setUrl] = useState('')
   const [cookie, setCookie] = useState('')
   const [loading, setLoading] = useState(false)
   const [quality, setQuality] = useState('best')
+  const [qrBase64, setQrBase64] = useState<string | null>(null)
+  const [sessionId, setSessionId] = useState<string | null>(null)
+  const [loginInProgress, setLoginInProgress] = useState(false)
+  const [loginFinished, setLoginFinished] = useState(false)
+  const [autoDownloadTriggered, setAutoDownloadTriggered] = useState(false)
+  const pollRef = useRef<number | null>(null)
 
   const handleDownload = async () => {
     if (!url) {
@@ -16,7 +22,9 @@ export default function VideoDownloader() {
 
     setLoading(true)
     try {
-      const resp = await downloadBilibili(url, cookie, quality)
+      // 如果使用扫码登录并已完成，则将 cookie 设为 session:<id>
+      const cookieToSend = loginFinished && sessionId ? `session:${sessionId}` : cookie
+      const resp = await downloadBilibili(url, cookieToSend, quality)
       // 期望后端返回 { download_url: string } 或 { message: string, requires_login: boolean }
       if (resp.data && resp.data.download_url) {
         // 打开下载链接
@@ -36,11 +44,86 @@ export default function VideoDownloader() {
     }
   }
 
+  // 启动扫码登录流程
+  const handleStartLogin = async () => {
+    try {
+      setLoginInProgress(true)
+      const resp = await startBilibiliLogin()
+      const { session_id, qr_image_base64 } = resp.data
+      setSessionId(session_id)
+      setQrBase64(qr_image_base64)
+
+      // 开始轮询登录状态
+      pollRef.current = window.setInterval(async () => {
+        try {
+          const st = await getBilibiliLoginStatus(session_id)
+          if (st.data && st.data.finished) {
+            setLoginFinished(true)
+            setLoginInProgress(false)
+            // 自动填充 cookie 为 session:ID，方便直接下载
+            setCookie(`session:${session_id}`)
+            if (pollRef.current) {
+              clearInterval(pollRef.current)
+              pollRef.current = null
+            }
+            toast.success('登录成功，已自动使用该会话进行下载')
+          }
+        } catch (err) {
+          console.error('login poll error', err)
+        }
+      }, 2000)
+    } catch (err: any) {
+      console.error('start login error', err)
+      toast.error(err?.response?.data?.detail || '启动扫码登录失败')
+      setLoginInProgress(false)
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current)
+      }
+    }
+  }, [])
+
+  // 当扫码登录成功且已有视频链接时，自动发起解析下载（只触发一次）
+  useEffect(() => {
+    if (loginFinished && sessionId && url && !autoDownloadTriggered) {
+      setAutoDownloadTriggered(true)
+      toast('检测到已登录，会在 1 秒后自动开始解析并下载', { icon: '🔔' })
+      setTimeout(() => {
+        handleDownload()
+      }, 1000)
+    }
+  }, [loginFinished, sessionId, url, autoDownloadTriggered])
+
   return (
     <div className="h-full p-6">
       <div className="max-w-3xl mx-auto bg-white rounded shadow p-6">
         <h2 className="text-lg font-medium mb-4">多平台视频下载（当前：哔哩哔哩）</h2>
         <div className="space-y-4">
+          <div>
+            <button
+              onClick={handleStartLogin}
+              disabled={loginInProgress || loginFinished}
+              className="px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-60 mr-3"
+            >
+              {loginFinished ? '已登录' : loginInProgress ? '等待扫码...' : '扫码登录（B站）'}
+            </button>
+            {sessionId && (
+              <span className="text-sm text-gray-500 ml-2">会话：{sessionId}</span>
+            )}
+          </div>
+
+          {qrBase64 && !loginFinished && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">扫码登录二维码</label>
+              <img src={`data:image/png;base64,${qrBase64}`} alt="bili-qr" className="w-48 h-48 border" />
+              <p className="text-xs text-gray-500 mt-1">请使用哔哩哔哩 App 扫码，等待页面提示登录完成。</p>
+            </div>
+          )}
+
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">视频链接</label>
             <input
