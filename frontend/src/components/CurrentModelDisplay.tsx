@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Brain } from 'lucide-react'
+import ProviderIcon from './ProviderIcon'
 
 interface ModelConfig {
   provider: string
@@ -111,7 +112,7 @@ export default function CurrentModelDisplay() {
 
   return (
     <div className="flex items-center gap-2 text-sm">
-      <Brain className="w-4 h-4 text-blue-600" />
+      <ProviderIcon provider={currentModel.provider} className="w-4 h-4" />
       <span className="text-gray-600">当前模型:</span>
       <span className="font-medium text-gray-900">{currentModel.name}</span>
       <span className="text-gray-500">{currentModel.providerName}</span>

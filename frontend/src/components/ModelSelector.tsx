@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Brain, ChevronDown, AlertCircle, RefreshCw, Loader2 } from 'lucide-react'
+import ProviderIcon from './ProviderIcon'
 import toast from 'react-hot-toast'
 import { getModelList } from '../services/api'
 
@@ -170,8 +171,12 @@ export default function ModelSelector() {
           onClick={() => setIsOpen(!isOpen)}
           className="w-full flex items-center justify-between px-4 py-2.5 bg-white border border-gray-300 rounded-lg hover:border-blue-400 hover:bg-blue-50/50 transition-all text-left"
         >
-          <div className="flex items-center gap-2 min-w-0">
-            <Brain className="w-4 h-4 text-blue-600 shrink-0" />
+            <div className="flex items-center gap-2 min-w-0">
+            {currentModel ? (
+              <ProviderIcon provider={currentModel.provider} className="w-4 h-4 shrink-0" />
+            ) : (
+              <Brain className="w-4 h-4 text-blue-600 shrink-0" />
+            )}
             <span className="text-sm font-medium text-gray-900 truncate">
               {currentModel?.name || '请选择模型'}
             </span>
@@ -210,8 +215,8 @@ export default function ModelSelector() {
                       : 'text-gray-700'
                   }`}
                 >
-                  <div className="flex items-center gap-2">
-                    <Brain className="w-4 h-4" />
+                    <div className="flex items-center gap-2">
+                    <ProviderIcon provider={model.provider} className="w-4 h-4" />
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium truncate">{model.name}</div>
                       <div className="text-xs text-gray-500 mt-0.5">

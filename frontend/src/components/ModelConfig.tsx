@@ -3,6 +3,7 @@ import { Save, Eye, EyeOff, Key, Brain, CheckCircle2, RefreshCw, Loader2, Info }
 import toast from 'react-hot-toast'
 import { getModelList, testModelConnection, getProviders } from '../services/api'
 import ModelSelectorPanel from './ModelSelectorPanel'
+import ProviderIcon from './ProviderIcon'
 
 interface Provider {
   id: string
@@ -24,16 +25,6 @@ interface ModelItem {
   id: string
   name: string
   provider: string
-}
-
-const PROVIDER_ICONS: Record<string, string> = {
-  openai: '🤖',
-  deepseek: '🔍',
-  qwen: '💬',
-  claude: '🧠',
-  gemini: '✨',
-  groq: '⚡',
-  ollama: '🦙',
 }
 
 const PROVIDER_COLORS: Record<string, string> = {
@@ -419,8 +410,8 @@ export default function ModelConfig() {
                       : 'border-gray-200 hover:border-gray-300'
                   }`}
                 >
-                  <div className={`w-12 h-12 ${PROVIDER_COLORS[provider.id] || 'bg-gray-500'} rounded-lg flex items-center justify-center text-2xl`}>
-                    {PROVIDER_ICONS[provider.id] || '🤖'}
+                  <div className="w-12 h-12 rounded-lg flex items-center justify-center">
+                    <ProviderIcon provider={provider.id} className="w-8 h-8" alt={provider.name} />
                   </div>
                   <div className="text-center">
                     <div className="text-sm font-medium text-gray-900">{provider.name}</div>
