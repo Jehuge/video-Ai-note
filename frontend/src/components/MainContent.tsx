@@ -4,6 +4,7 @@ import TaskList from './TaskList'
 import TaskSteps from './TaskSteps'
 import ModelConfig from './ModelConfig'
 import UploadPage from './UploadPage'
+import VideoDownloader from './VideoDownloader'
 
 interface MainContentProps {
   activeMenu: 'home' | 'upload' | 'model' | 'settings'
@@ -18,6 +19,10 @@ export default function MainContent({ activeMenu }: MainContentProps) {
 
   if (activeMenu === 'model') {
     return <ModelConfig />
+  }
+
+  if (activeMenu === 'download') {
+    return <VideoDownloader />
   }
 
   if (activeMenu === 'settings') {

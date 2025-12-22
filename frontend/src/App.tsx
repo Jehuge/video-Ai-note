@@ -4,7 +4,7 @@ import MainContent from './components/MainContent'
 import CurrentModelDisplay from './components/CurrentModelDisplay'
 import { Toaster } from 'react-hot-toast'
 
-type MenuItem = 'home' | 'upload' | 'model' | 'settings'
+type MenuItem = 'home' | 'upload' | 'model' | 'settings' | 'download'
 
 function App() {
   const [activeMenu, setActiveMenu] = useState<MenuItem>('home')

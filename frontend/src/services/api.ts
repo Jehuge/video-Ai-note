@@ -49,6 +49,15 @@ export const uploadVideo = async (
   return response
 }
 
+// 通过后端解析并下载哔哩哔哩视频
+export const downloadBilibili = async (url: string, cookie: string = '', quality: string = 'best') => {
+  return await api.post('/download/bilibili', {
+    url,
+    cookie,
+    quality,
+  })
+}
+
 // 获取任务状态
 export const getTaskStatus = async (taskId: string) => {
   return await api.get(`/task/${taskId}`)
