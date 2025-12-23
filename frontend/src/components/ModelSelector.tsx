@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Brain, ChevronDown, AlertCircle, RefreshCw, Loader2 } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { getModelList } from '../services/api'
-import { migrateLegacyConfigs } from '../services/modelService'
+import { migrateLegacyConfigs, listModelsFromConfigs } from '../services/modelService'
 
 interface Model {
   id: string
@@ -40,105 +39,51 @@ export default function ModelSelector() {
 
   // 从 localStorage 加载模型配置并获取模型列表
   useEffect(() => {
-    // 先迁移旧配置格式到新 schema（如果需要），然后加载模型
-    try {
-      migrateLegacyConfigs()
-    } catch (e) {
-      console.warn('迁移模型配置失败:', e)
+    const init = async () => {
+      try {
+        migrateLegacyConfigs()
+        const all = await listModelsFromConfigs()
+        setModels(all.map((m: any) => ({
+          id: m.id,
+          name: m.name,
+          provider: m.provider,
+          model: m.model,
+          hasApiKey: !!m.hasApiKey,
+        })))
+        // 选择默认
+        const savedSelected = localStorage.getItem('selectedModel')
+        if (savedSelected && all.find((x: any) => x.id === savedSelected)) {
+          setSelectedModel(savedSelected)
+        } else if (all.length > 0) {
+          setSelectedModel(all[0].id)
+          localStorage.setItem('selectedModel', all[0].id)
+        }
+      } catch (e) {
+        console.warn('加载模型列表失败:', e)
+      }
     }
-    loadModelsFromConfig()
+    init()
   }, [])
 
   const loadModelsFromConfig = async () => {
+    setLoading(true)
     try {
-      const savedConfigs = localStorage.getItem('modelConfigs')
-      if (!savedConfigs) {
-        setModels([])
-        return
-      }
+      await migrateLegacyConfigs()
+      const all = await listModelsFromConfigs()
+      setModels(all.map((m: any) => ({
+        id: m.id,
+        name: m.name,
+        provider: m.provider,
+        model: m.model,
+        hasApiKey: !!m.hasApiKey,
+      })))
 
-      const configs = JSON.parse(savedConfigs)
-      const modelList: Model[] = []
-
-      setLoading(true)
-
-      // 遍历所有配置的提供商
-      for (const [providerId, config] of Object.entries(configs)) {
-        const providerConfig = config as any
-
-        // 新格式：支持多个 instances
-        if (providerConfig.instances && Array.isArray(providerConfig.instances)) {
-          for (const instance of providerConfig.instances) {
-            // Ollama 不需要 apiKey
-            if (providerId !== 'ollama' && !(instance.apiKey || '').trim()) {
-              continue
-            }
-
-            try {
-              const response = await getModelList({
-                provider: providerId,
-                api_key: instance.apiKey || '',
-                base_url: instance.baseUrl,
-              })
-
-              if (response.data.code === 200) {
-                const apiModels = response.data.data || []
-                apiModels.forEach((m: any) => {
-                  modelList.push({
-                    id: `${providerId}-${instance.id}-${m.id}`,
-                    name: `${instance.name ? instance.name + ' - ' : ''}${m.name} (${m.id})`,
-                    provider: providerId,
-                    model: m.id,
-                    hasApiKey: !!instance.apiKey,
-                  })
-                })
-              }
-            } catch (error) {
-              console.error(`加载 ${providerId}/${instance.id} 模型失败:`, error)
-            }
-          }
-
-          continue
-        }
-
-        // 兼容旧格式
-        if (!providerConfig?.apiKey) {
-          continue
-        }
-
-        try {
-          const response = await getModelList({
-            provider: providerId,
-            api_key: providerConfig.apiKey,
-            base_url: providerConfig.baseUrl,
-          })
-
-          if (response.data.code === 200) {
-            const apiModels = response.data.data || []
-            apiModels.forEach((m: any) => {
-              modelList.push({
-                id: `${providerId}-${m.id}`,
-                name: `${m.name} (${m.id})`,
-                provider: providerId,
-                model: m.id,
-                hasApiKey: true,
-              })
-            })
-          }
-        } catch (error) {
-          console.error(`加载 ${providerId} 模型失败:`, error)
-        }
-      }
-
-      setModels(modelList)
-      
-      // 如果还没有选择模型，选择第一个
       const savedSelected = localStorage.getItem('selectedModel')
-      if (savedSelected && modelList.find(m => m.id === savedSelected)) {
+      if (savedSelected && all.find((x: any) => x.id === savedSelected)) {
         setSelectedModel(savedSelected)
-      } else if (modelList.length > 0) {
-        setSelectedModel(modelList[0].id)
-        localStorage.setItem('selectedModel', modelList[0].id)
+      } else if (all.length > 0) {
+        setSelectedModel(all[0].id)
+        localStorage.setItem('selectedModel', all[0].id)
       }
     } catch (error) {
       console.error('加载模型配置失败:', error)

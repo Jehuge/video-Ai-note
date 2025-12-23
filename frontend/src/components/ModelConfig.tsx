@@ -637,6 +637,38 @@ export default function ModelConfig() {
             )}
           </div>
 
+          {/* 实例选择与管理 */}
+          <div className="flex items-center justify-between mb-4 gap-4">
+            <div className="flex items-center gap-2">
+              <label className="text-sm text-gray-700">实例</label>
+              <select
+                value={selectedInstanceId}
+                onChange={(e) => setSelectedInstanceId(e.target.value)}
+                className="px-3 py-2 border border-gray-300 rounded-lg"
+              >
+                {(providerInstances || []).map((ins: any) => (
+                  <option key={ins.id} value={ins.id}>
+                    {ins.name || ins.id}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={addInstance}
+                className="px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
+              >
+                新增实例
+              </button>
+              <button
+                onClick={() => removeInstance(selectedInstanceId)}
+                className="px-3 py-1.5 bg-red-50 text-red-700 rounded-lg hover:bg-red-100 text-sm"
+              >
+                删除实例
+              </button>
+            </div>
+          </div>
+
           <div className="space-y-6">
             {/* API Key */}
             <div>

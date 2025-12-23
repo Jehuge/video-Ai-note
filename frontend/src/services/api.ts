@@ -74,18 +74,40 @@ export const regenerateNote = async (taskId: string) => {
   if (selectedModelId && modelConfigs) {
     try {
       const configs = JSON.parse(modelConfigs)
-      // 从 selectedModelId 中提取 provider 和 modelId
-      const firstDashIndex = selectedModelId.indexOf('-')
-      if (firstDashIndex > 0) {
-        const provider = selectedModelId.substring(0, firstDashIndex)
-        const modelId = selectedModelId.substring(firstDashIndex + 1)
+      // 支持两种 id 格式：provider-model 或 provider-instance-model（model 本身可能包含 -）
+      const parts = selectedModelId.split('-')
+      if (parts.length >= 2) {
+        const provider = parts[0]
+        let instanceId: string | null = null
+        let modelId = ''
+        if (parts.length >= 3) {
+          instanceId = parts[1]
+          modelId = parts.slice(2).join('-')
+        } else {
+          modelId = parts.slice(1).join('-')
+        }
+
         const providerConfig = configs[provider]
-        
         if (providerConfig) {
+          let apiKey = ''
+          let baseUrl = ''
+          // 如果存在 instanceId，优先使用 instance 的 apiKey / baseUrl
+          if (instanceId && providerConfig.instances && Array.isArray(providerConfig.instances)) {
+            const ins = providerConfig.instances.find((x: any) => x.id === instanceId)
+            if (ins) {
+              apiKey = ins.apiKey || ins.api_key || ''
+              baseUrl = ins.baseUrl || ins.base_url || ''
+            }
+          }
+
+          // fallback 到 provider 顶层字段
+          apiKey = apiKey || providerConfig.apiKey || providerConfig.api_key || ''
+          baseUrl = baseUrl || providerConfig.baseUrl || providerConfig.base_url || ''
+
           modelConfig = {
             provider,
-            api_key: providerConfig.apiKey || '',
-            base_url: providerConfig.baseUrl || '',
+            api_key: apiKey,
+            base_url: baseUrl,
             model: modelId,
           }
           console.log('重新生成时使用的模型配置:', modelConfig)
