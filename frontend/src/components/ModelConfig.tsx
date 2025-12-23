@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Save, Eye, EyeOff, Key, Brain, CheckCircle2, RefreshCw, Loader2, Info } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { getModelList, testModelConnection, getProviders } from '../services/api'
-import { migrateLegacyConfigs, saveModelConfigs, loadModelConfigs } from '../services/modelService'
+import { saveModelConfigs, loadModelConfigs, convertLegacyConfigs } from '../services/modelService'
 import ModelSelectorPanel from './ModelSelectorPanel'
 
 interface Provider {
@@ -72,12 +72,7 @@ export default function ModelConfig() {
 
     const loadProviders = async () => {
       providersLoadedRef.current = true
-      // 迁移旧的 modelConfigs 到新 schema（如果需要）
-      try {
-        migrateLegacyConfigs()
-      } catch (e) {
-        console.warn('迁移模型配置时出错:', e)
-      }
+      // 不修改 localStorage，仅在内存中可视化兼容旧格式
       try {
         const response = await getProviders()
         if (response.data.code === 200) {

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Brain, ChevronDown, AlertCircle, RefreshCw, Loader2 } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { migrateLegacyConfigs, listModelsFromConfigs } from '../services/modelService'
+import { listModelsFromConfigs } from '../services/modelService'
 
 interface Model {
   id: string
@@ -41,7 +41,6 @@ export default function ModelSelector() {
   useEffect(() => {
     const init = async () => {
       try {
-        migrateLegacyConfigs()
         const all = await listModelsFromConfigs()
         setModels(all.map((m: any) => ({
           id: m.id,
@@ -68,7 +67,6 @@ export default function ModelSelector() {
   const loadModelsFromConfig = async () => {
     setLoading(true)
     try {
-      await migrateLegacyConfigs()
       const all = await listModelsFromConfigs()
       setModels(all.map((m: any) => ({
         id: m.id,

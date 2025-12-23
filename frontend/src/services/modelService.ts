@@ -43,10 +43,9 @@ export function saveModelConfigs(configs: ModelConfigs) {
   }
 }
 
-// 将旧格式（provider.apiKey / provider.baseUrl / provider.models 等）迁移为新格式（provider.instances）
-export function migrateLegacyConfigs(): ModelConfigs {
-  const configs = loadModelConfigs()
-  let changed = false
+// 将旧格式（provider.apiKey / provider.baseUrl / provider.models 等）转换为新格式（provider.instances）但不写回 localStorage
+export function convertLegacyConfigs(rawConfigs?: any): ModelConfigs {
+  const configs = rawConfigs && typeof rawConfigs === 'object' ? { ...rawConfigs } : loadModelConfigs()
 
   Object.entries(configs).forEach(([providerId, cfg]) => {
     if (!cfg || typeof cfg !== 'object') return
@@ -54,7 +53,7 @@ export function migrateLegacyConfigs(): ModelConfigs {
     // 如果已经是新格式，跳过
     if (Array.isArray((cfg as any).instances)) return
 
-    // 如果存在旧格式的关键字段，转换为 instances
+    // 如果存在旧格式的关键字段，转换为 instances（仅返回转换结果，不写回）
     if (cfg.apiKey || cfg.baseUrl || cfg.models || cfg.model) {
       const instances: InstanceConfig[] = [
         {
@@ -71,13 +70,8 @@ export function migrateLegacyConfigs(): ModelConfigs {
         ...cfg,
         instances,
       }
-      changed = true
     }
   })
-
-  if (changed) {
-    saveModelConfigs(configs)
-  }
 
   return configs
 }
