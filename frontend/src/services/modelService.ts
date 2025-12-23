@@ -76,6 +76,31 @@ export function convertLegacyConfigs(rawConfigs?: any): ModelConfigs {
   return configs
 }
 
+// 判断给定 baseUrl 是否为本地/私有网络地址
+function isLocalBaseUrl(baseUrl?: string | null): boolean {
+  if (!baseUrl) return false
+  try {
+    const u = new URL(baseUrl)
+    const host = u.hostname
+    if (host === 'localhost' || host === '127.0.0.1') return true
+    // 私有 IP 段 10.*, 192.168.*, 172.16-31.*
+    if (/^10\.\d+\.\d+\.\d+$/.test(host)) return true
+    if (/^192\.168\.\d+\.\d+$/.test(host)) return true
+    if (/^172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+$/.test(host)) return true
+    return false
+  } catch (e) {
+    return false
+  }
+}
+
+// 判断是否需要 API Key：如果 provider 是 ollama 或 baseUrl 是本地/私有地址，则不需要
+export function needsApiKey(providerId: string, baseUrl?: string | null): boolean {
+  if (!providerId) return true
+  if (providerId === 'ollama') return false
+  if (isLocalBaseUrl(baseUrl)) return false
+  return true
+}
+
 // 从所有已保存的配置中列出可用模型（会调用后端 /models/list 接口）
 export async function listModelsFromConfigs(): Promise<
   Array<{
@@ -103,8 +128,8 @@ export async function listModelsFromConfigs(): Promise<
     // 支持新格式 (instances)
     if (providerConfig.instances && Array.isArray(providerConfig.instances)) {
       for (const instance of providerConfig.instances) {
-        // Ollama 可以没有 apiKey
-        if (providerId !== 'ollama' && !(instance.apiKey || '').trim()) {
+        // 如果需要 apiKey 且未提供，则跳过
+        if (needsApiKey(providerId, instance.baseUrl) && !(instance.apiKey || '').trim()) {
           continue
         }
 
@@ -136,7 +161,7 @@ export async function listModelsFromConfigs(): Promise<
       // 兼容旧格式
       const apiKey = (providerConfig.apiKey as string) || ''
       const baseUrl = (providerConfig.baseUrl as string) || ''
-      if (providerId !== 'ollama' && !apiKey.trim()) {
+      if (needsApiKey(providerId, baseUrl) && !apiKey.trim()) {
         continue
       }
 

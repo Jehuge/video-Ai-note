@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Save, Eye, EyeOff, Key, Brain, CheckCircle2, RefreshCw, Loader2, Info } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { getModelList, testModelConnection, getProviders } from '../services/api'
-import { saveModelConfigs, loadModelConfigs, convertLegacyConfigs } from '../services/modelService'
+import { saveModelConfigs, loadModelConfigs, convertLegacyConfigs, needsApiKey } from '../services/modelService'
 import ModelSelectorPanel from './ModelSelectorPanel'
 
 interface Provider {
@@ -207,8 +207,8 @@ export default function ModelConfig() {
   }
 
   const loadModels = async () => {
-    // Ollama 不需要 API Key，其他提供商需要
-    if (selectedProvider !== 'ollama' && !currentConfig.apiKey?.trim()) {
+    // 如果该 provider/baseUrl 需要 API Key，则校验
+    if (needsApiKey(selectedProvider, currentConfig.baseUrl) && !currentConfig.apiKey?.trim()) {
       toast.error('请先输入 API Key')
       setAvailableModels([])
       return
@@ -289,8 +289,8 @@ export default function ModelConfig() {
   const handleSave = async () => {
     setSaving(true)
     try {
-      // 验证 API Key（Ollama 除外）
-      if (selectedProvider !== 'ollama' && !currentConfig.apiKey.trim()) {
+      // 验证 API Key（如果 provider/baseUrl 需要）
+      if (needsApiKey(selectedProvider, currentConfig.baseUrl) && !currentConfig.apiKey.trim()) {
         toast.error('请输入 API Key')
         setSaving(false)
         return
@@ -531,8 +531,8 @@ export default function ModelConfig() {
   }
 
   const testConnection = async () => {
-    // Ollama 不需要 API Key
-    if (selectedProvider !== 'ollama' && !currentConfig.apiKey.trim()) {
+    // 如果 provider/baseUrl 需要 API Key，则校验
+    if (needsApiKey(selectedProvider, currentConfig.baseUrl) && !currentConfig.apiKey.trim()) {
       toast.error('请先输入 API Key')
       return
     }
@@ -580,7 +580,7 @@ export default function ModelConfig() {
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
             {providers.map((provider) => {
               const providerConfig = configs[provider.id]
-              const hasConfig = providerConfig && (provider.id === 'ollama' || providerConfig.apiKey?.trim())
+              const hasConfig = providerConfig && (!needsApiKey(provider.id, providerConfig?.baseUrl) || providerConfig.apiKey?.trim())
               const hasModel = providerConfig?.model?.trim()
               
               return (
@@ -670,8 +670,8 @@ export default function ModelConfig() {
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 <Key className="w-4 h-4 inline mr-1" />
                 API Key
-                {selectedProvider !== 'ollama' && <span className="text-red-500 ml-1">*</span>}
-                {selectedProvider === 'ollama' && <span className="text-gray-400 ml-1 text-xs">(可选)</span>}
+                {needsApiKey(selectedProvider, currentConfig.baseUrl) && <span className="text-red-500 ml-1">*</span>}
+                {!needsApiKey(selectedProvider, currentConfig.baseUrl) && <span className="text-gray-400 ml-1 text-xs">(可选)</span>}
                 {currentConfig.apiKey && (
                   <span className="ml-2 text-xs text-green-600">✓ 已配置</span>
                 )}
@@ -684,7 +684,7 @@ export default function ModelConfig() {
                   placeholder={selectedProvider === 'ollama' ? 'Ollama 本地服务不需要 API Key（可留空）' : `请输入 ${currentProvider?.name || '提供商'} API Key`}
                   className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 pr-10"
                 />
-                {selectedProvider !== 'ollama' && (
+                {needsApiKey(selectedProvider, currentConfig.baseUrl) && (
                   <button
                     type="button"
                     onClick={() => toggleApiKeyVisibility(selectedProvider)}
@@ -739,9 +739,9 @@ export default function ModelConfig() {
                 </label>
                 <button
                   onClick={loadModels}
-                  disabled={loadingModels || (selectedProvider !== 'ollama' && !currentConfig.apiKey?.trim())}
+                  disabled={loadingModels || (needsApiKey(selectedProvider, currentConfig.baseUrl) && !currentConfig.apiKey?.trim())}
                   className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 disabled:opacity-50 disabled:cursor-not-allowed px-2 py-1 rounded hover:bg-blue-50 transition-colors"
-                  title={selectedProvider !== 'ollama' && !currentConfig.apiKey?.trim() ? '请先输入 API Key' : '刷新模型列表'}
+                  title={needsApiKey(selectedProvider, currentConfig.baseUrl) && !currentConfig.apiKey?.trim() ? '请先输入 API Key' : '刷新模型列表'}
                 >
                   <RefreshCw className={`w-3 h-3 ${loadingModels ? 'animate-spin' : ''}`} />
                   {loadingModels ? '加载中...' : '刷新列表'}
@@ -816,7 +816,7 @@ export default function ModelConfig() {
             <div className="flex gap-3 pt-4 border-t border-gray-200">
               <button
                 onClick={testConnection}
-                disabled={selectedProvider !== 'ollama' && !currentConfig.apiKey?.trim()}
+                disabled={needsApiKey(selectedProvider, currentConfig.baseUrl) && !currentConfig.apiKey?.trim()}
                 className="flex-1 px-4 py-2.5 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <CheckCircle2 className="w-4 h-4" />
