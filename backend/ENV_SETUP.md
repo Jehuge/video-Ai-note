@@ -7,6 +7,7 @@
 这是**必需**的环境变量，用于调用 OpenAI API 生成笔记。
 
 **获取方式：**
+
 1. 访问 https://platform.openai.com/api-keys
 2. 登录你的 OpenAI 账号
 3. 创建新的 API Key
@@ -22,6 +23,7 @@ OPENAI_API_KEY=sk-your-actual-api-key-here
 ```
 
 **注意：**
+
 - 不要将 `.env` 文件提交到 Git（已在 .gitignore 中）
 - API Key 以 `sk-` 开头
 - 确保 API Key 有效且有足够的余额
@@ -98,6 +100,7 @@ cd backend
 ### Q: 如何检查 API Key 是否有效？
 
 A: 可以在命令行测试：
+
 ```bash
 curl https://api.openai.com/v1/models \
   -H "Authorization: Bearer sk-your-api-key"
@@ -110,10 +113,10 @@ A: 目前只支持 OpenAI 兼容的 API。如果需要支持其他服务（如 D
 ### Q: 如何提高转录准确度？
 
 A: 可以：
+
 1. 使用更大的 Whisper 模型（如 `medium` 或 `large`）
 2. 使用 GPU 加速（设置 `WHISPER_DEVICE=cuda`）
 
 ### Q: 配置修改后需要重启吗？
 
 A: 是的，修改 `.env` 文件后需要重启后端服务。
-
