@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Save, Eye, EyeOff, Key, Brain, CheckCircle2, RefreshCw, Loader2, Info } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { getModelList, testModelConnection, getProviders } from '../services/api'
+import { migrateLegacyConfigs, saveModelConfigs, loadModelConfigs } from '../services/modelService'
 import ModelSelectorPanel from './ModelSelectorPanel'
 
 interface Provider {
@@ -50,6 +51,8 @@ export default function ModelConfig() {
   const [providers, setProviders] = useState<Provider[]>([])
   const [selectedProvider, setSelectedProvider] = useState<string>('openai')
   const [configs, setConfigs] = useState<Record<string, ModelConfig>>({})
+  // 当前 provider 下选择的 instance id（单一全局选中，用作 UI 编辑）
+  const [selectedInstanceId, setSelectedInstanceId] = useState<string>('default')
   const [showApiKeys, setShowApiKeys] = useState<Record<string, boolean>>({})
   const [saving, setSaving] = useState(false)
   const [loadingModels, setLoadingModels] = useState(false)
@@ -69,6 +72,12 @@ export default function ModelConfig() {
 
     const loadProviders = async () => {
       providersLoadedRef.current = true
+      // 迁移旧的 modelConfigs 到新 schema（如果需要）
+      try {
+        migrateLegacyConfigs()
+      } catch (e) {
+        console.warn('迁移模型配置时出错:', e)
+      }
       try {
         const response = await getProviders()
         if (response.data.code === 200) {
@@ -78,12 +87,23 @@ export default function ModelConfig() {
           // 初始化配置
           const initialConfigs: Record<string, ModelConfig> = {}
           providerList.forEach((p: Provider) => {
+            // 使用 instances 新格式
             initialConfigs[p.id] = {
               provider: p.id,
               apiKey: '',
               baseUrl: p.base_url,
-              model: '',  // 保留用于兼容
-              models: [],  // 多选的模型列表
+              model: '', // 兼容字段
+              models: [],
+              instances: [
+                {
+                  id: 'default',
+                  name: '默认配置',
+                  apiKey: '',
+                  baseUrl: p.base_url,
+                  models: [],
+                  modelCapabilities: {},
+                },
+              ],
             }
           })
           
@@ -92,14 +112,31 @@ export default function ModelConfig() {
           if (savedConfigs) {
             try {
               const parsed = JSON.parse(savedConfigs)
-              // 合并已保存的配置
+              // 合并已保存的配置（支持 instances 或旧格式）
               Object.keys(parsed).forEach((key) => {
-                if (initialConfigs[key]) {
+                if (!initialConfigs[key]) return
+                const cfg = parsed[key]
+                if (cfg?.instances && Array.isArray(cfg.instances)) {
                   initialConfigs[key] = {
                     ...initialConfigs[key],
-                    ...parsed[key],
-                    // 确保 models 数组存在
-                    models: parsed[key].models || (parsed[key].model ? [parsed[key].model] : []),
+                    ...cfg,
+                    instances: cfg.instances,
+                  }
+                } else {
+                  // 兼容旧格式：转换为单个 instance
+                  initialConfigs[key] = {
+                    ...initialConfigs[key],
+                    ...cfg,
+                    instances: [
+                      {
+                        id: 'default',
+                        name: '默认配置',
+                        apiKey: cfg.apiKey || cfg.api_key || '',
+                        baseUrl: cfg.baseUrl || cfg.base_url || initialConfigs[key].instances[0].baseUrl,
+                        models: cfg.models || (cfg.model ? [cfg.model] : []),
+                        modelCapabilities: cfg.modelCapabilities || {},
+                      },
+                    ],
                   }
                 }
               })
@@ -142,17 +179,36 @@ export default function ModelConfig() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProvider, configs])
 
-  const currentConfig = configs[selectedProvider] || {
+  // 计算当前 provider 的 active instance（UI 编辑目标）
+  const providerConfigRaw = configs[selectedProvider] || ({} as any)
+  const providerInstances = (providerConfigRaw.instances && Array.isArray(providerConfigRaw.instances))
+    ? providerConfigRaw.instances
+    : [
+        {
+          id: 'default',
+          name: '默认配置',
+          apiKey: providerConfigRaw.apiKey || '',
+          baseUrl: providerConfigRaw.baseUrl || providers.find(p => p.id === selectedProvider)?.base_url || '',
+          models: providerConfigRaw.models || (providerConfigRaw.model ? [providerConfigRaw.model] : []),
+          modelCapabilities: providerConfigRaw.modelCapabilities || {},
+        },
+      ]
+
+  // 如果当前 selectedInstanceId 不在 instances 中，重置为第一个
+  useEffect(() => {
+    if (!providerInstances.find((ins: any) => ins.id === selectedInstanceId)) {
+      setSelectedInstanceId(providerInstances[0]?.id || 'default')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProvider, configs])
+
+  const currentInstance = providerInstances.find((ins: any) => ins.id === selectedInstanceId) || providerInstances[0]
+  const currentConfig = {
     provider: selectedProvider,
-    apiKey: '',
-    baseUrl: providers.find(p => p.id === selectedProvider)?.base_url || '',
-    model: '',  // 保留用于兼容
-    models: [],  // 多选的模型列表
-  }
-  
-  // 确保 models 数组存在
-  if (!currentConfig.models) {
-    currentConfig.models = currentConfig.model ? [currentConfig.model] : []
+    apiKey: currentInstance?.apiKey || '',
+    baseUrl: currentInstance?.baseUrl || providers.find(p => p.id === selectedProvider)?.base_url || '',
+    model: currentInstance?.models && currentInstance.models.length > 0 ? currentInstance.models[0] : '',
+    models: currentInstance?.models || [],
   }
 
   const loadModels = async () => {
@@ -176,7 +232,7 @@ export default function ModelConfig() {
 
     setLoadingModels(true)
     try {
-      const response = await getModelList({
+    const response = await getModelList({
         provider: selectedProvider,
         api_key: currentConfig.apiKey || '',  // Ollama 可以为空
         base_url: currentConfig.baseUrl,
@@ -252,36 +308,57 @@ export default function ModelConfig() {
         return
       }
 
-      // 保存到 localStorage - 确保保存完整的配置对象，包括所有提供商
+      // 构建新的 configs，使用 instances 格式保存当前 provider 的 instance
       const updatedConfigs = {
-        ...configs,  // 保留所有其他提供商的配置
-        [selectedProvider]: {
-          ...currentConfig,
-          provider: selectedProvider,  // 确保 provider 字段正确
-        },
+        ...configs,
+      } as any
+
+      const providerCfg = updatedConfigs[selectedProvider] || {}
+      const instances = providerCfg.instances && Array.isArray(providerCfg.instances) ? providerCfg.instances.slice() : []
+
+      // 更新或插入当前 instance
+      const existingIndex = instances.findIndex((ins: any) => ins.id === selectedInstanceId)
+      const newInstance = {
+        id: selectedInstanceId || 'default',
+        name: currentInstance?.name || '默认配置',
+        apiKey: currentConfig.apiKey || '',
+        baseUrl: currentConfig.baseUrl || '',
+        models: currentConfig.models || [],
+        modelCapabilities: currentInstance?.modelCapabilities || {},
       }
-      
-      // 确保所有提供商的配置都被保留
+
+      if (existingIndex >= 0) {
+        instances[existingIndex] = newInstance
+      } else {
+        instances.push(newInstance)
+      }
+
+      updatedConfigs[selectedProvider] = {
+        ...(providerCfg || {}),
+        instances,
+      }
+
+      // 确保其他 providers 至少存在空结构
       providers.forEach((provider) => {
         if (!updatedConfigs[provider.id]) {
           updatedConfigs[provider.id] = {
             provider: provider.id,
-            apiKey: '',
-            baseUrl: provider.base_url,
-            model: '',  // 保留用于兼容
-            models: [],  // 多选的模型列表
-          }
-        } else {
-          // 确保 models 数组存在
-          if (!updatedConfigs[provider.id].models) {
-            updatedConfigs[provider.id].models = updatedConfigs[provider.id].model 
-              ? [updatedConfigs[provider.id].model] 
-              : []
+            instances: [
+              {
+                id: 'default',
+                name: '默认配置',
+                apiKey: '',
+                baseUrl: provider.base_url,
+                models: [],
+                modelCapabilities: {},
+              },
+            ],
           }
         }
       })
-      
-      localStorage.setItem('modelConfigs', JSON.stringify(updatedConfigs))
+
+      // 使用共享的保存函数
+      saveModelConfigs(updatedConfigs)
       setConfigs(updatedConfigs)
       
       // 显示保存的配置信息
@@ -305,26 +382,37 @@ export default function ModelConfig() {
   }
 
   const handleConfigChange = (field: keyof ModelConfig, value: string) => {
-    const updatedConfig = {
-      ...(configs[selectedProvider] || {
-        provider: selectedProvider,
-        apiKey: '',
-        baseUrl: providers.find(p => p.id === selectedProvider)?.base_url || '',
-        model: '',
-        models: [],
-      }),
-      [field]: value,
-    }
-    
-    // 确保 models 数组存在
-    if (!updatedConfig.models) {
-      updatedConfig.models = []
-    }
-    
-    setConfigs((prev) => ({
-      ...prev,
-      [selectedProvider]: updatedConfig,
-    }))
+    // 更新当前 instance 的字段（仅在内存中）
+    setConfigs((prev) => {
+      const copy = { ...(prev || {}) } as any
+      const providerCfg = copy[selectedProvider] || {}
+      const instances = providerCfg.instances && Array.isArray(providerCfg.instances) ? providerCfg.instances.slice() : [
+        {
+          id: 'default',
+          name: '默认配置',
+          apiKey: '',
+          baseUrl: providers.find(p => p.id === selectedProvider)?.base_url || '',
+          models: [],
+          modelCapabilities: {},
+        },
+      ]
+
+      const idx = instances.findIndex((ins: any) => ins.id === selectedInstanceId)
+      const target = idx >= 0 ? { ...instances[idx] } : { ...instances[0] }
+      // @ts-ignore
+      target[field] = value
+      if (idx >= 0) {
+        instances[idx] = target
+      } else {
+        instances[0] = target
+      }
+
+      copy[selectedProvider] = {
+        ...(providerCfg || {}),
+        instances,
+      }
+      return copy
+    })
   }
   
   // 处理模型多选
@@ -335,18 +423,35 @@ export default function ModelConfig() {
     const updatedModels = isSelected
       ? currentModels.filter((id: string) => id !== modelId)
       : [...currentModels, modelId]
-    
-    // 直接更新 configs，避免 handleConfigChange 的类型问题
-    const updatedConfig = {
-      ...currentConfig,
-      models: updatedModels,
-      model: updatedModels.length > 0 ? updatedModels[0] : '',  // 兼容字段
-    }
-    
-    setConfigs((prev) => ({
-      ...prev,
-      [selectedProvider]: updatedConfig,
-    }))
+
+    // 更新当前 instance 的 models
+    setConfigs((prev) => {
+      const copy = { ...(prev || {}) } as any
+      const providerCfg = copy[selectedProvider] || {}
+      const instances = providerCfg.instances && Array.isArray(providerCfg.instances) ? providerCfg.instances.slice() : [
+        {
+          id: 'default',
+          name: '默认配置',
+          apiKey: '',
+          baseUrl: providers.find(p => p.id === selectedProvider)?.base_url || '',
+          models: [],
+          modelCapabilities: {},
+        },
+      ]
+      const idx = instances.findIndex((ins: any) => ins.id === selectedInstanceId)
+      const target = idx >= 0 ? { ...instances[idx] } : { ...instances[0] }
+      target.models = updatedModels
+      if (idx >= 0) {
+        instances[idx] = target
+      } else {
+        instances[0] = target
+      }
+      copy[selectedProvider] = {
+        ...(providerCfg || {}),
+        instances,
+      }
+      return copy
+    })
   }
 
   const toggleApiKeyVisibility = (provider: string) => {
@@ -354,6 +459,80 @@ export default function ModelConfig() {
       ...prev,
       [provider]: !prev[provider],
     }))
+  }
+
+  // 实例管理：添加/删除/重命名
+  const addInstance = () => {
+    const newId = `inst-${Date.now()}`
+    const newInstance = {
+      id: newId,
+      name: '新实例',
+      apiKey: '',
+      baseUrl: providers.find(p => p.id === selectedProvider)?.base_url || '',
+      models: [],
+      modelCapabilities: {},
+    }
+
+    setConfigs((prev) => {
+      const copy = { ...(prev || {}) } as any
+      const providerCfg = copy[selectedProvider] || {}
+      const instances = providerCfg.instances && Array.isArray(providerCfg.instances) ? providerCfg.instances.slice() : []
+      instances.push(newInstance)
+      copy[selectedProvider] = {
+        ...(providerCfg || {}),
+        instances,
+      }
+      return copy
+    })
+    setSelectedInstanceId(newId)
+  }
+
+  const removeInstance = (instanceId: string) => {
+    if (!confirm('确认删除该实例？此操作不可撤销')) return
+    setConfigs((prev) => {
+      const copy = { ...(prev || {}) } as any
+      const providerCfg = copy[selectedProvider] || {}
+      let instances = providerCfg.instances && Array.isArray(providerCfg.instances) ? providerCfg.instances.slice() : []
+      if (instances.length <= 1) {
+        // 保持至少一个实例
+        instances = [
+          {
+            id: 'default',
+            name: '默认配置',
+            apiKey: '',
+            baseUrl: providers.find(p => p.id === selectedProvider)?.base_url || '',
+            models: [],
+            modelCapabilities: {},
+          },
+        ]
+      } else {
+        instances = instances.filter((ins: any) => ins.id !== instanceId)
+      }
+      copy[selectedProvider] = {
+        ...(providerCfg || {}),
+        instances,
+      }
+      return copy
+    })
+    // 切换选中到第一个实例
+    setSelectedInstanceId('default')
+  }
+
+  const renameInstance = (instanceId: string, newName: string) => {
+    setConfigs((prev) => {
+      const copy = { ...(prev || {}) } as any
+      const providerCfg = copy[selectedProvider] || {}
+      const instances = providerCfg.instances && Array.isArray(providerCfg.instances) ? providerCfg.instances.slice() : []
+      const idx = instances.findIndex((ins: any) => ins.id === instanceId)
+      if (idx >= 0) {
+        instances[idx] = { ...instances[idx], name: newName }
+      }
+      copy[selectedProvider] = {
+        ...(providerCfg || {}),
+        instances,
+      }
+      return copy
+    })
   }
 
   const testConnection = async () => {

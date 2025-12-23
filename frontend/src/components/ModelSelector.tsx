@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Brain, ChevronDown, AlertCircle, RefreshCw, Loader2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { getModelList } from '../services/api'
+import { migrateLegacyConfigs } from '../services/modelService'
 
 interface Model {
   id: string
@@ -39,6 +40,12 @@ export default function ModelSelector() {
 
   // 从 localStorage 加载模型配置并获取模型列表
   useEffect(() => {
+    // 先迁移旧配置格式到新 schema（如果需要），然后加载模型
+    try {
+      migrateLegacyConfigs()
+    } catch (e) {
+      console.warn('迁移模型配置失败:', e)
+    }
     loadModelsFromConfig()
   }, [])
 
@@ -58,6 +65,43 @@ export default function ModelSelector() {
       // 遍历所有配置的提供商
       for (const [providerId, config] of Object.entries(configs)) {
         const providerConfig = config as any
+
+        // 新格式：支持多个 instances
+        if (providerConfig.instances && Array.isArray(providerConfig.instances)) {
+          for (const instance of providerConfig.instances) {
+            // Ollama 不需要 apiKey
+            if (providerId !== 'ollama' && !(instance.apiKey || '').trim()) {
+              continue
+            }
+
+            try {
+              const response = await getModelList({
+                provider: providerId,
+                api_key: instance.apiKey || '',
+                base_url: instance.baseUrl,
+              })
+
+              if (response.data.code === 200) {
+                const apiModels = response.data.data || []
+                apiModels.forEach((m: any) => {
+                  modelList.push({
+                    id: `${providerId}-${instance.id}-${m.id}`,
+                    name: `${instance.name ? instance.name + ' - ' : ''}${m.name} (${m.id})`,
+                    provider: providerId,
+                    model: m.id,
+                    hasApiKey: !!instance.apiKey,
+                  })
+                })
+              }
+            } catch (error) {
+              console.error(`加载 ${providerId}/${instance.id} 模型失败:`, error)
+            }
+          }
+
+          continue
+        }
+
+        // 兼容旧格式
         if (!providerConfig?.apiKey) {
           continue
         }
