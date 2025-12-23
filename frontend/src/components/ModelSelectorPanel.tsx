@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Brain, ChevronDown, CheckCircle2 } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { listModelsFromConfigs } from '../services/modelService'
 
 interface ModelOption {
   id: string
@@ -36,76 +37,40 @@ export default function ModelSelectorPanel() {
   const [isOpen, setIsOpen] = useState(false)
 
   // 从 localStorage 加载所有已配置的模型
-  const loadModels = () => {
+  const loadModels = async () => {
     try {
-      const savedConfigs = localStorage.getItem('modelConfigs')
-      
-      if (!savedConfigs) {
-        setAvailableModels([])
-        setSelectedModel('')
-        return
-      }
+      // 使用统一的服务获取模型列表 (已包含 migration, instance 遍历, 和 filtering)
+      const allModels = await listModelsFromConfigs()
 
-      const configs = JSON.parse(savedConfigs)
-      const modelList: ModelOption[] = []
-
-      // 遍历所有配置，提取已配置的模型
-      Object.entries(configs).forEach(([providerId, config]: [string, any]) => {
-        if (!config || typeof config !== 'object') {
-          return
+      const modelList: ModelOption[] = allModels.map((m: any) => {
+        let modelName = m.name
+        // 尝试从 name 中移除 id 部分 "Name (ID)" -> "Name"
+        if (modelName.endsWith(`(${m.model})`)) {
+          modelName = modelName.slice(0, -(m.model.length + 2)).trim()
+        } else if (modelName === m.model) {
+          // 如果 name 和 model 一样，尝试美化
+          // 处理特殊格式的模型名称（如 hf.co/unsloth/Qwen3-4B-GGUF:Q6_K_XL）
+          if (modelName.includes('/')) {
+            const parts = modelName.split('/')
+            modelName = parts[parts.length - 1]
+          }
+          // 处理量化格式（如 :Q6_K_XL），保留量化信息
+          if (modelName.includes(':')) {
+            const colonIndex = modelName.lastIndexOf(':')
+            if (colonIndex > 0) {
+              const baseName = modelName.substring(0, colonIndex)
+              const quantInfo = modelName.substring(colonIndex + 1)
+              modelName = `${baseName} (${quantInfo})`
+            }
+          }
         }
-        
-        // 检查是否已配置：有模型ID（支持 models 数组或 model 字符串），且（Ollama 或 有 API Key）
-        // 优先使用 models 数组，如果没有则使用 model 字符串（兼容旧版本）
-        const modelIds = config.models && Array.isArray(config.models) && config.models.length > 0
-          ? config.models
-          : (config.model && typeof config.model === 'string' && config.model.trim() ? [config.model.trim()] : [])
-        
-        // Ollama 不需要 API Key，其他提供商需要
-        const hasApiKey = providerId === 'ollama' || (config.apiKey && typeof config.apiKey === 'string' && config.apiKey.trim())
-        
-        // 只有同时满足：有模型 且 （Ollama 或 有 API Key）才添加
-        if (modelIds.length > 0 && hasApiKey) {
-          // 遍历所有选中的模型
-          modelIds.forEach((modelId: string) => {
-            const trimmedModelId = typeof modelId === 'string' ? modelId.trim() : String(modelId).trim()
-            if (!trimmedModelId) return
-            
-            // 模型名称处理
-            let modelName = trimmedModelId
-            
-            // 如果 modelId 包含提供商前缀（如 openai-gpt-4o），提取后面的部分
-            if (trimmedModelId.startsWith(providerId + '-')) {
-              modelName = trimmedModelId.substring(providerId.length + 1)
-            }
-            
-            // 处理特殊格式的模型名称（如 hf.co/unsloth/Qwen3-4B-GGUF:Q6_K_XL）
-            // 提取最后一部分作为显示名称
-            if (modelName.includes('/')) {
-              const parts = modelName.split('/')
-              modelName = parts[parts.length - 1]
-            }
-            
-            // 处理量化格式（如 :Q6_K_XL），保留量化信息
-            if (modelName.includes(':')) {
-              const colonIndex = modelName.lastIndexOf(':')
-              if (colonIndex > 0) {
-                const baseName = modelName.substring(0, colonIndex)
-                const quantInfo = modelName.substring(colonIndex + 1)
-                modelName = `${baseName} (${quantInfo})`
-              }
-            }
-            
-            const modelOption: ModelOption = {
-              id: `${providerId}-${trimmedModelId}`,
-              name: modelName,
-              provider: providerId,
-              providerName: PROVIDER_LABELS[providerId] || providerId,
-              modelId: trimmedModelId,
-            }
-            
-            modelList.push(modelOption)
-          })
+
+        return {
+          id: m.id,
+          name: modelName || m.model, // Display name
+          provider: m.provider,
+          providerName: PROVIDER_LABELS[m.provider] || m.provider,
+          modelId: m.model
         }
       })
 
@@ -121,7 +86,7 @@ export default function ModelSelectorPanel() {
 
       // 加载已选择的模型
       const savedSelected = localStorage.getItem('selectedModel')
-      
+
       if (savedSelected && modelList.find(m => m.id === savedSelected)) {
         setSelectedModel(savedSelected)
       } else if (modelList.length > 0) {
@@ -143,7 +108,8 @@ export default function ModelSelectorPanel() {
   useEffect(() => {
     loadModels()
 
-    // 监听 storage 变化
+
+    // 监听 storage 变化 (跨标签页同步)
     const handleStorageChange = (e: StorageEvent) => {
       if (e.key === 'modelConfigs' || e.key === 'selectedModel') {
         loadModels()
@@ -151,12 +117,23 @@ export default function ModelSelectorPanel() {
     }
     window.addEventListener('storage', handleStorageChange)
 
-    // 定期检查配置变化（因为同窗口的 localStorage 变化不会触发 storage 事件）
-    const interval = setInterval(loadModels, 1000)
+    // 监听配置保存事件 (同窗口同步)
+    const handleConfigUpdate = () => {
+      loadModels()
+    }
+    window.addEventListener('modelConfigsUpdated', handleConfigUpdate)
+
+    // 监听模型切换事件 (同窗口同步)
+    const handleModelChange = () => {
+      // 主要是重新高亮选中项，这里 loadModels 也会读取 selectedModel
+      loadModels()
+    }
+    window.addEventListener('modelChanged', handleModelChange)
 
     return () => {
       window.removeEventListener('storage', handleStorageChange)
-      clearInterval(interval)
+      window.removeEventListener('modelConfigsUpdated', handleConfigUpdate)
+      window.removeEventListener('modelChanged', handleModelChange)
     }
   }, [])
 
@@ -215,9 +192,8 @@ export default function ModelSelectorPanel() {
               )}
             </div>
             {currentModel && (
-              <span className={`text-xs px-2.5 py-1 rounded border shrink-0 ${
-                PROVIDER_COLORS[currentModel.provider] || 'bg-gray-100 text-gray-700 border-gray-200'
-              }`}>
+              <span className={`text-xs px-2.5 py-1 rounded border shrink-0 ${PROVIDER_COLORS[currentModel.provider] || 'bg-gray-100 text-gray-700 border-gray-200'
+                }`}>
                 {currentModel.providerName}
               </span>
             )}
@@ -245,11 +221,10 @@ export default function ModelSelectorPanel() {
                     <button
                       key={model.id}
                       onClick={() => handleModelChange(model.id)}
-                      className={`w-full px-4 py-3 text-left hover:bg-blue-50 transition-colors border-b border-gray-100 last:border-b-0 ${
-                        selectedModel === model.id
-                          ? 'bg-blue-50 text-blue-700 font-medium'
-                          : 'text-gray-700'
-                      }`}
+                      className={`w-full px-4 py-3 text-left hover:bg-blue-50 transition-colors border-b border-gray-100 last:border-b-0 ${selectedModel === model.id
+                        ? 'bg-blue-50 text-blue-700 font-medium'
+                        : 'text-gray-700'
+                        }`}
                     >
                       <div className="flex items-center gap-3">
                         <Brain className="w-4 h-4" />
@@ -258,9 +233,8 @@ export default function ModelSelectorPanel() {
                           <div className="text-xs text-gray-500 mt-0.5">{model.providerName}</div>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
-                          <span className={`text-xs px-2 py-0.5 rounded border ${
-                            PROVIDER_COLORS[model.provider] || 'bg-gray-100 text-gray-700 border-gray-200'
-                          }`}>
+                          <span className={`text-xs px-2 py-0.5 rounded border ${PROVIDER_COLORS[model.provider] || 'bg-gray-100 text-gray-700 border-gray-200'
+                            }`}>
                             {model.providerName}
                           </span>
                           {selectedModel === model.id && (

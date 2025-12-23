@@ -64,6 +64,17 @@ export default function ModelSelector() {
     init()
   }, [])
 
+  // 监听自定义事件，支持同窗口内 config 保存后刷新模型列表
+  useEffect(() => {
+    const handler = () => {
+      loadModelsFromConfig()
+    }
+    window.addEventListener('modelConfigsUpdated', handler)
+    return () => {
+      window.removeEventListener('modelConfigsUpdated', handler)
+    }
+  }, [])
+
   const loadModelsFromConfig = async () => {
     setLoading(true)
     try {

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Save, Eye, EyeOff, Key, Brain, CheckCircle2, RefreshCw, Loader2, Info } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { getModelList, testModelConnection, getProviders } from '../services/api'
-import { saveModelConfigs, loadModelConfigs, convertLegacyConfigs, needsApiKey } from '../services/modelService'
+import { saveModelConfigs, needsApiKey } from '../services/modelService'
 import ModelSelectorPanel from './ModelSelectorPanel'
 
 interface Provider {
@@ -19,6 +19,9 @@ interface ModelConfig {
   baseUrl?: string
   model: string  // 保留用于兼容，但主要使用 models
   models: string[]  // 多选的模型列表
+  // 新增：instances 与 modelCapabilities 用于 UI 管理
+  instances?: any[]
+  modelCapabilities?: Record<string, any>
 }
 
 interface ModelItem {
@@ -57,9 +60,6 @@ export default function ModelConfig() {
   const [saving, setSaving] = useState(false)
   const [loadingModels, setLoadingModels] = useState(false)
   const [availableModels, setAvailableModels] = useState<ModelItem[]>([])
-  const loadModelsRef = useRef<(() => Promise<void>) | null>(null)
-  // 缓存已加载的模型列表，避免重复请求
-  const modelsCacheRef = useRef<Record<string, { models: ModelItem[], timestamp: number }>>({})
   // 防止重复加载提供商列表
   const providersLoadedRef = useRef(false)
 
@@ -78,7 +78,7 @@ export default function ModelConfig() {
         if (response.data.code === 200) {
           const providerList = response.data.data || []
           setProviders(providerList)
-          
+
           // 初始化配置
           const initialConfigs: Record<string, ModelConfig> = {}
           providerList.forEach((p: Provider) => {
@@ -101,7 +101,7 @@ export default function ModelConfig() {
               ],
             }
           })
-          
+
           // 从 localStorage 加载已保存的配置
           const savedConfigs = localStorage.getItem('modelConfigs')
           if (savedConfigs) {
@@ -127,7 +127,7 @@ export default function ModelConfig() {
                         id: 'default',
                         name: '默认配置',
                         apiKey: cfg.apiKey || cfg.api_key || '',
-                        baseUrl: cfg.baseUrl || cfg.base_url || initialConfigs[key].instances[0].baseUrl,
+                        baseUrl: cfg.baseUrl || cfg.base_url || (initialConfigs[key]?.instances?.[0]?.baseUrl || ''),
                         models: cfg.models || (cfg.model ? [cfg.model] : []),
                         modelCapabilities: cfg.modelCapabilities || {},
                       },
@@ -139,7 +139,7 @@ export default function ModelConfig() {
               console.error('加载配置失败:', e)
             }
           }
-          
+
           setConfigs(initialConfigs)
         }
       } catch (error) {
@@ -151,43 +151,20 @@ export default function ModelConfig() {
     loadProviders()
   }, [])
 
-  // 当切换提供商时，从缓存加载模型列表（如果存在）
-  // 不再自动刷新，需要用户手动点击"刷新列表"按钮
-  useEffect(() => {
-    const currentConfig = configs[selectedProvider]
-    if (!currentConfig) {
-      setAvailableModels([])
-      return
-    }
-    
-    const cacheKey = `${selectedProvider}-${currentConfig.apiKey || ''}-${currentConfig.baseUrl || ''}`
-    const cached = modelsCacheRef.current[cacheKey]
-    
-    // 如果缓存存在且未过期（5分钟内），直接使用缓存
-    if (cached && Date.now() - cached.timestamp < 5 * 60 * 1000) {
-      setAvailableModels(cached.models)
-    } else {
-      // 如果没有缓存或缓存过期，清空列表，等待用户手动刷新
-      setAvailableModels([])
-    }
-    // 只监听 selectedProvider 的变化
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedProvider, configs])
-
   // 计算当前 provider 的 active instance（UI 编辑目标）
   const providerConfigRaw = configs[selectedProvider] || ({} as any)
   const providerInstances = (providerConfigRaw.instances && Array.isArray(providerConfigRaw.instances))
     ? providerConfigRaw.instances
     : [
-        {
-          id: 'default',
-          name: '默认配置',
-          apiKey: providerConfigRaw.apiKey || '',
-          baseUrl: providerConfigRaw.baseUrl || providers.find(p => p.id === selectedProvider)?.base_url || '',
-          models: providerConfigRaw.models || (providerConfigRaw.model ? [providerConfigRaw.model] : []),
-          modelCapabilities: providerConfigRaw.modelCapabilities || {},
-        },
-      ]
+      {
+        id: 'default',
+        name: '默认配置',
+        apiKey: providerConfigRaw.apiKey || '',
+        baseUrl: providerConfigRaw.baseUrl || providers.find(p => p.id === selectedProvider)?.base_url || '',
+        models: providerConfigRaw.models || (providerConfigRaw.model ? [providerConfigRaw.model] : []),
+        modelCapabilities: providerConfigRaw.modelCapabilities || {},
+      },
+    ]
 
   // 如果当前 selectedInstanceId 不在 instances 中，重置为第一个
   useEffect(() => {
@@ -206,85 +183,53 @@ export default function ModelConfig() {
     models: currentInstance?.models || [],
   }
 
-  const loadModels = async () => {
-    // 如果该 provider/baseUrl 需要 API Key，则校验
-    if (needsApiKey(selectedProvider, currentConfig.baseUrl) && !currentConfig.apiKey?.trim()) {
-      toast.error('请先输入 API Key')
-      setAvailableModels([])
-      return
+  // 2. Focused effect to load models only when pertinent config changes (apiKey/baseUrl/provider)
+  // NOT when the user toggles a model selection in the UI
+  const [lastFetchedKey, setLastFetchedKey] = useState<string>('')
+
+  const loadModels = async (force: boolean | any = false) => {
+    // If called from Event, force might be an Event object, treat as false unless explicitly true
+    const isForce = force === true
+
+    // Key to determine if we actually need to fetch
+    const fetchKey = `${selectedProvider}-${currentConfig.apiKey}-${currentConfig.baseUrl}`
+
+    if (!isForce && fetchKey === lastFetchedKey && availableModels.length > 0) {
+      return // Already fetched for this specific config
     }
 
-    // 检查缓存
-    const cacheKey = `${selectedProvider}-${currentConfig.apiKey || ''}-${currentConfig.baseUrl || ''}`
-    const cached = modelsCacheRef.current[cacheKey]
-    
-    // 如果缓存存在且未过期（5分钟内），直接使用缓存
-    if (cached && Date.now() - cached.timestamp < 5 * 60 * 1000) {
-      setAvailableModels(cached.models)
-      toast.success(`已加载缓存的模型列表（${cached.models.length} 个模型）`, { duration: 2000 })
+    // 如果该 provider/baseUrl 需要 API Key，则校验
+    if (needsApiKey(selectedProvider, currentConfig.baseUrl) && !currentConfig.apiKey.trim()) {
+      // Don't error immediately on load, just don't fetch
       return
     }
 
     setLoadingModels(true)
     try {
-    const response = await getModelList({
+      const response = await getModelList({
         provider: selectedProvider,
-        api_key: currentConfig.apiKey || '',  // Ollama 可以为空
+        api_key: currentConfig.apiKey,
         base_url: currentConfig.baseUrl,
       })
 
       if (response.data.code === 200) {
-        const models = response.data.data || []
-        setAvailableModels(models)
-        
-        // 保存到缓存
-        modelsCacheRef.current[cacheKey] = {
-          models,
-          timestamp: Date.now(),
-        }
-        
-        // 同时保存到 localStorage 作为持久化缓存
-        try {
-          const cacheStorageKey = 'modelListCache'
-          const allCache = JSON.parse(localStorage.getItem(cacheStorageKey) || '{}')
-          allCache[cacheKey] = {
-            models,
-            timestamp: Date.now(),
-          }
-          localStorage.setItem(cacheStorageKey, JSON.stringify(allCache))
-        } catch (e) {
-          console.warn('保存模型列表缓存失败:', e)
-        }
-        
-        toast.success(`已加载 ${models.length} 个模型`, { duration: 2000 })
-        
-        // 如果当前选择的模型不在列表中，但列表不为空，选择第一个
-        if (models.length > 0) {
-          const hasCurrentModel = models.find((m: ModelItem) => m.id === currentConfig.model)
-          if (!hasCurrentModel && currentConfig.model) {
-            // 如果之前选择的模型不在新列表中，保持原选择但显示提示
-            console.warn(`之前选择的模型 ${currentConfig.model} 不在当前列表中`)
-          }
+        setAvailableModels(response.data.data || [])
+        setLastFetchedKey(fetchKey)
+        // If user manually clicked refresh, show success
+        if (isForce) {
+          toast.success(`已刷新模型列表`)
         }
       } else {
         toast.error(response.data.msg || '获取模型列表失败')
-        setAvailableModels([])
       }
     } catch (error: any) {
       console.error('获取模型列表失败:', error)
-      toast.error(error.response?.data?.msg || '获取模型列表失败')
-      setAvailableModels([])
     } finally {
       setLoadingModels(false)
     }
   }
 
-  // 将 loadModels 保存到 ref，供 useEffect 使用
-  // 注意：这里不包含 currentConfig.model，避免选择模型时触发刷新
-  useEffect(() => {
-    loadModelsRef.current = loadModels
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentConfig.apiKey, currentConfig.baseUrl, selectedProvider])
+  // No auto-refresh effect. User must click "Refresh" manually.
 
   const handleSave = async () => {
     setSaving(true)
@@ -355,7 +300,10 @@ export default function ModelConfig() {
       // 使用共享的保存函数
       saveModelConfigs(updatedConfigs)
       setConfigs(updatedConfigs)
-      
+
+      // Dispatch custom event to notify ModelSelector
+      window.dispatchEvent(new Event('modelConfigsUpdated'))
+
       // 显示保存的配置信息
       const selectedModelNames = currentConfig.models
         .map((modelId: string) => {
@@ -364,11 +312,7 @@ export default function ModelConfig() {
         })
         .join(', ')
       toast.success(`配置保存成功！已选择 ${currentConfig.models.length} 个模型：${selectedModelNames}`, { duration: 3000 })
-      
-      // 保存后重新加载模型列表，确保显示正确
-      setTimeout(() => {
-        loadModels()
-      }, 500)
+
     } catch (error: any) {
       toast.error(error.message || '保存失败')
     } finally {
@@ -409,12 +353,12 @@ export default function ModelConfig() {
       return copy
     })
   }
-  
+
   // 处理模型多选
   const handleModelToggle = (modelId: string) => {
     const currentModels = currentConfig.models || []
     const isSelected = currentModels.includes(modelId)
-    
+
     const updatedModels = isSelected
       ? currentModels.filter((id: string) => id !== modelId)
       : [...currentModels, modelId]
@@ -468,6 +412,7 @@ export default function ModelConfig() {
       modelCapabilities: {},
     }
 
+    // persist new instance immediately so ModelSelector (which reads localStorage) can pick it up
     setConfigs((prev) => {
       const copy = { ...(prev || {}) } as any
       const providerCfg = copy[selectedProvider] || {}
@@ -538,14 +483,14 @@ export default function ModelConfig() {
     }
 
     toast.loading('测试连接中...', { id: 'test-connection' })
-    
+
     try {
       const response = await testModelConnection({
         provider: selectedProvider,
         api_key: currentConfig.apiKey || '',  // Ollama 可以为空
         base_url: currentConfig.baseUrl,
       })
-      
+
       if (response.data.code === 200) {
         toast.success(response.data.msg || '连接成功', { id: 'test-connection' })
         // 连接成功后，加载模型列表
@@ -582,16 +527,15 @@ export default function ModelConfig() {
               const providerConfig = configs[provider.id]
               const hasConfig = providerConfig && (!needsApiKey(provider.id, providerConfig?.baseUrl) || providerConfig.apiKey?.trim())
               const hasModel = providerConfig?.model?.trim()
-              
+
               return (
                 <button
                   key={provider.id}
                   onClick={() => setSelectedProvider(provider.id)}
-                  className={`flex flex-col items-center gap-2 px-4 py-3 rounded-lg border-2 transition-all relative ${
-                    selectedProvider === provider.id
-                      ? 'border-blue-500 bg-blue-50'
-                      : 'border-gray-200 hover:border-gray-300'
-                  }`}
+                  className={`flex flex-col items-center gap-2 px-4 py-3 rounded-lg border-2 transition-all relative ${selectedProvider === provider.id
+                    ? 'border-blue-500 bg-blue-50'
+                    : 'border-gray-200 hover:border-gray-300'
+                    }`}
                 >
                   <div className={`w-12 h-12 ${PROVIDER_COLORS[provider.id] || 'bg-gray-500'} rounded-lg flex items-center justify-center text-2xl`}>
                     {PROVIDER_ICONS[provider.id] || '🤖'}
@@ -647,6 +591,15 @@ export default function ModelConfig() {
                   </option>
                 ))}
               </select>
+            </div>
+            <div className="ml-4">
+              <label className="text-sm text-gray-700 block mb-1">实例名称</label>
+              <input
+                type="text"
+                value={currentInstance?.name || ''}
+                onChange={(e) => renameInstance(selectedInstanceId, e.target.value)}
+                className="px-3 py-2 border border-gray-300 rounded-lg"
+              />
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -747,7 +700,7 @@ export default function ModelConfig() {
                   {loadingModels ? '加载中...' : '刷新列表'}
                 </button>
               </div>
-              
+
               {loadingModels ? (
                 <div className="flex items-center justify-center py-4 border border-gray-300 rounded-lg">
                   <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
@@ -761,11 +714,10 @@ export default function ModelConfig() {
                       return (
                         <label
                           key={model.id}
-                          className={`flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-colors ${
-                            isSelected
-                              ? 'bg-blue-50 border border-blue-200'
-                              : 'hover:bg-gray-50 border border-transparent'
-                          }`}
+                          className={`flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-colors ${isSelected
+                            ? 'bg-blue-50 border border-blue-200'
+                            : 'hover:bg-gray-50 border border-transparent'
+                            }`}
                           onClick={(e) => {
                             // 防止点击 label 时触发两次
                             e.preventDefault()

@@ -54,15 +54,16 @@ export function convertLegacyConfigs(rawConfigs?: any): ModelConfigs {
     if (Array.isArray((cfg as any).instances)) return
 
     // 如果存在旧格式的关键字段，转换为 instances（仅返回转换结果，不写回）
-    if (cfg.apiKey || cfg.baseUrl || cfg.models || cfg.model) {
+    const legacyCfg = cfg as any
+    if (legacyCfg.apiKey || legacyCfg.baseUrl || legacyCfg.models || legacyCfg.model) {
       const instances: InstanceConfig[] = [
         {
           id: 'default',
           name: '默认配置',
-          apiKey: (cfg.apiKey as string) || '',
-          baseUrl: (cfg.baseUrl as string) || '',
-          models: (cfg.models as string[]) || (cfg.model ? [cfg.model as string] : []),
-          modelCapabilities: cfg.modelCapabilities || {},
+          apiKey: (legacyCfg.apiKey as string) || '',
+          baseUrl: (legacyCfg.baseUrl as string) || '',
+          models: (legacyCfg.models as string[]) || (legacyCfg.model ? [legacyCfg.model as string] : []),
+          modelCapabilities: legacyCfg.modelCapabilities || {},
         },
       ]
 
@@ -80,7 +81,7 @@ export function convertLegacyConfigs(rawConfigs?: any): ModelConfigs {
 function isLocalBaseUrl(baseUrl?: string | null): boolean {
   if (!baseUrl) return false
   try {
-    const u = new URL(baseUrl)
+    const u = new URL(baseUrl.trim())
     const host = u.hostname
     if (host === 'localhost' || host === '127.0.0.1') return true
     // 私有 IP 段 10.*, 192.168.*, 172.16-31.*
@@ -112,7 +113,10 @@ export async function listModelsFromConfigs(): Promise<
     supportsVision?: boolean
   }>
 > {
-  const configs = loadModelConfigs()
+  // 1. 加载并标准化配置（强制转换为 instances 格式）
+  const rawConfigs = loadModelConfigs()
+  const configs = convertLegacyConfigs(rawConfigs)
+
   const results: Array<{
     id: string
     name: string
@@ -125,23 +129,34 @@ export async function listModelsFromConfigs(): Promise<
   for (const [providerId, cfg] of Object.entries(configs)) {
     const providerConfig = cfg as ProviderConfig
 
-    // 支持新格式 (instances)
+    // 经过 convertLegacyConfigs 处理后，应该都有 instances
     if (providerConfig.instances && Array.isArray(providerConfig.instances)) {
       for (const instance of providerConfig.instances) {
+        const apiKey = (instance.apiKey || '').trim()
+        const baseUrl = (instance.baseUrl || '').trim()
+
         // 如果需要 apiKey 且未提供，则跳过
-        if (needsApiKey(providerId, instance.baseUrl) && !(instance.apiKey || '').trim()) {
+        if (needsApiKey(providerId, baseUrl) && !apiKey) {
           continue
         }
 
         try {
           const resp = await getModelList({
             provider: providerId,
-            api_key: instance.apiKey || '',
-            base_url: instance.baseUrl,
+            api_key: apiKey,
+            base_url: baseUrl,
           })
 
           if (resp?.data?.code === 200) {
-            const models = resp.data.data || []
+            let models = resp.data.data || []
+
+            // 严格过滤：只显示用户显式选中的模型
+            // 如果 instance.models 是数组（哪怕为空），就严格按照它来过滤
+            // 这意味着如果用户什么都没选，下拉框里就什么都不显示，而不是显示服务端返回的所有模型
+            if (instance.models && Array.isArray(instance.models)) {
+              models = models.filter((m: any) => instance.models!.includes(m.id))
+            }
+
             models.forEach((m: any) => {
               results.push({
                 id: `${providerId}-${instance.id}-${m.id}`,
@@ -157,40 +172,9 @@ export async function listModelsFromConfigs(): Promise<
           console.error(`获取 ${providerId}/${instance.id} 模型失败:`, e)
         }
       }
-    } else {
-      // 兼容旧格式
-      const apiKey = (providerConfig.apiKey as string) || ''
-      const baseUrl = (providerConfig.baseUrl as string) || ''
-      if (needsApiKey(providerId, baseUrl) && !apiKey.trim()) {
-        continue
-      }
-
-      try {
-        const resp = await getModelList({
-          provider: providerId,
-          api_key: apiKey,
-          base_url: baseUrl,
-        })
-
-        if (resp?.data?.code === 200) {
-          const models = resp.data.data || []
-          models.forEach((m: any) => {
-            results.push({
-              id: `${providerId}-${m.id}`,
-              name: `${m.name} (${m.id})`,
-              provider: providerId,
-              model: m.id,
-              supportsVision: m.supportsVision || m.capabilities?.supportsVision || false,
-            })
-          })
-        }
-      } catch (e) {
-        console.error(`获取 ${providerId} 模型失败:`, e)
-      }
     }
   }
 
   return results
 }
-
 
