@@ -1,9 +1,9 @@
 import { useState } from 'react'
-import { Home, Settings, Bot, Upload, Download, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Home, Settings, Bot, Upload, ChevronLeft, ChevronRight } from 'lucide-react'
 
 interface SidebarProps {
-  activeMenu: 'home' | 'upload' | 'model' | 'settings' | 'download'
-  onMenuChange: (menu: 'home' | 'upload' | 'model' | 'settings' | 'download') => void
+  activeMenu: 'home' | 'upload' | 'model' | 'settings'
+  onMenuChange: (menu: 'home' | 'upload' | 'model' | 'settings') => void
 }
 
 export default function Sidebar({ activeMenu, onMenuChange }: SidebarProps) {
@@ -24,11 +24,6 @@ export default function Sidebar({ activeMenu, onMenuChange }: SidebarProps) {
       id: 'model' as const,
       name: '模型配置',
       icon: <Bot className="w-5 h-5" />,
-    },
-    {
-      id: 'download' as const,
-      name: '下载',
-      icon: <Download className="w-5 h-5" />,
     },
     {
       id: 'settings' as const,

@@ -49,31 +49,6 @@ export const uploadVideo = async (
   return response
 }
 
-// 通过后端解析并下载哔哩哔哩视频
-export const downloadBilibili = async (url: string, cookie: string = '', quality: string = 'best') => {
-  return await api.post('/download/bilibili', {
-    url,
-    cookie,
-    quality,
-  })
-}
-
-// 启动 B 站扫码登录，返回 session_id 与二维码 base64
-export const startBilibiliLogin = async () => {
-  return await api.post('/download/bilibili/start_login')
-}
-
-// 查询扫码登录状态
-export const getBilibiliLoginStatus = async (sessionId: string) => {
-  return await api.get(`/download/bilibili/login_status?session_id=${sessionId}`)
-}
-
-// （start/login_status 接口由上方函数提供）
-
-// 查询后台合并任务状态
-export const getBilibiliTaskStatus = async (taskId: string) => {
-  return await api.get(`/download/bilibili/task_status?task_id=${taskId}`)
-}
 
 // 获取任务状态
 export const getTaskStatus = async (taskId: string) => {
