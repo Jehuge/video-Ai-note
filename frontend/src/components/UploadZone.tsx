@@ -156,41 +156,48 @@ export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
           ${uploading ? 'pointer-events-none opacity-80' : ''}
         `}
             >
-                <div className="p-12 flex flex-col items-center justify-center text-center">
+                <div className="p-5 flex items-center gap-5">
                     <div className={`
-            p-5 rounded-full mb-6 transition-all duration-300 transform group-hover:scale-110
+            flex-shrink-0 w-12 h-12 rounded-full flex items-center justify-center transition-all duration-300 transform group-hover:scale-110
             ${isDragOver ? 'bg-blue-100 rotate-12' : 'bg-slate-50 group-hover:bg-blue-50 text-slate-400 group-hover:text-blue-500'}
           `}>
                         {uploading ? (
-                            <Loader2 className="w-10 h-10 animate-spin" />
+                            <Loader2 className="w-6 h-6 animate-spin" />
                         ) : (
-                            <UploadCloud className="w-10 h-10" />
+                            <UploadCloud className="w-6 h-6" />
                         )}
                     </div>
 
-                    {uploading ? (
-                        <div className="w-full max-w-[240px]">
-                            <div className="text-base font-semibold text-slate-900 mb-2">正在上传您的视频...</div>
-                            <div className="flex items-center justify-between text-xs text-slate-500 mb-2 font-medium">
-                                <span>{uploadProgress}%</span>
-                                <span>请稍候</span>
+                    <div className="flex-1 min-w-0 text-left">
+                        {uploading ? (
+                            <div className="w-full pr-4">
+                                <div className="flex items-center justify-between mb-1.5">
+                                    <div className="text-sm font-semibold text-slate-900">正在上传... {uploadProgress}%</div>
+                                </div>
+                                <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden w-full max-w-md ring-1 ring-slate-900/5">
+                                    <div
+                                        className="h-full bg-blue-500 transition-all duration-300 ease-out rounded-full"
+                                        style={{ width: `${uploadProgress}%` }}
+                                    />
+                                </div>
                             </div>
-                            <div className="h-2 bg-slate-100 rounded-full overflow-hidden ring-1 ring-slate-900/5">
-                                <div
-                                    className="h-full bg-blue-500 transition-all duration-300 ease-out rounded-full"
-                                    style={{ width: `${uploadProgress}%` }}
-                                />
+                        ) : (
+                            <div>
+                                <h3 className="text-base font-bold text-slate-900 group-hover:text-blue-600 transition-colors">
+                                    {isDragOver ? '释放文件以开始' : '点击或拖拽上传视频'}
+                                </h3>
+                                <p className="text-xs text-slate-500 mt-0.5">
+                                    支持 MP4, AVI, MP3 等 • 最大 500MB
+                                </p>
                             </div>
-                        </div>
-                    ) : (
-                        <div className="space-y-2">
-                            <h3 className="text-xl font-bold text-slate-900 tracking-tight group-hover:text-blue-600 transition-colors">
-                                {isDragOver ? '释放文件以开始' : '点击或拖拽上传'}
-                            </h3>
-                            <p className="text-sm text-slate-500 max-w-xs mx-auto leading-relaxed">
-                                支持 MP4, AVI, MP3, WAV 等主流格式<br />
-                                <span className="text-xs text-slate-400 mt-1 inline-block">单文件最大支持 500MB</span>
-                            </p>
+                        )}
+                    </div>
+
+                    {!uploading && (
+                        <div className="hidden sm:block">
+                            <span className="px-3 py-1.5 rounded-lg bg-slate-50 text-xs font-medium text-slate-600 border border-slate-200 group-hover:border-blue-200 group-hover:text-blue-600 transition-colors">
+                                选择文件
+                            </span>
                         </div>
                     )}
                 </div>
