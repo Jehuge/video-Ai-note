@@ -560,21 +560,22 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
 
   return (
     <>
-      <div className="h-full flex flex-col overflow-hidden">
-        {/* 固定头部 */}
-        <div className="bg-white border-b border-gray-200 px-6 py-4 shrink-0">
-          <div className="flex items-center justify-between">
-            <div className="flex-1 min-w-0">
-              <h2 className="text-xl font-semibold text-gray-900 truncate" title={task.filename}>{task.filename}</h2>
-              <p className="text-sm text-gray-500 mt-1">任务 ID: {task.id.slice(0, 8)}...</p>
-            </div>
-          </div>
-        </div>
-
-        {/* 步骤区域 */}
-        <div className="flex-1 overflow-y-auto p-6 bg-slate-50">
+      <div className="h-full flex flex-col overflow-hidden bg-slate-50">
+        {/* 统一滚动区域 */}
+        <div className="flex-1 overflow-y-auto p-6">
           <div className="max-w-4xl mx-auto">
-            <h3 className="text-lg font-semibold text-gray-900 mb-6 px-1">处理步骤</h3>
+            {/* 任务头部信息 - 现在是流的一部分 */}
+            <div className="mb-8 pl-1">
+              <h2 className="text-2xl font-bold text-gray-900 break-words leading-tight mb-2" title={task.filename}>
+                {task.filename}
+              </h2>
+              <p className="text-sm text-gray-500 font-medium opacity-80">任务 ID: {task.id.slice(0, 8)}...</p>
+            </div>
+
+            <h3 className="text-lg font-semibold text-gray-900 mb-6 px-1 flex items-center gap-2">
+              <span className="w-1 h-6 bg-blue-600 rounded-full inline-block"></span>
+              处理流程
+            </h3>
             <StepProgress steps={steps} currentStep={currentStepIndex} />
           </div>
         </div>
