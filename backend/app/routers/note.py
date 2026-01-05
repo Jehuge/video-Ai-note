@@ -40,6 +40,11 @@ def run_note_task_step(task_id: str, video_path: str, filename: str, step: str, 
             except Exception as e:
                 logger.warning(f"读取模型配置失败: {e}, 将使用默认配置")
         
+        # 从配置中获取 style
+        note_style = "simple"
+        if model_config and "note_style" in model_config:
+            note_style = model_config["note_style"]
+            
         generator = NoteGenerator(model_config=model_config)
         
         if step == "extract":
@@ -79,7 +84,7 @@ def run_note_task_step(task_id: str, video_path: str, filename: str, step: str, 
             audio_path = generator._extract_audio(video_path, task_id)
             transcript = generator._transcribe_audio(audio_path, task_id)
             # 如果启用了截图，禁用缓存确保重新生成
-            markdown = generator._summarize_text(transcript, filename, task_id, screenshot, use_cache=not screenshot)
+            markdown = generator._summarize_text(transcript, filename, task_id, screenshot, use_cache=not screenshot, note_style=note_style)
             
             # 清理 AI 输出中的思考过程标签（redacted_reasoning）
             import re
@@ -105,6 +110,7 @@ async def upload_video(
     request: Request,
     file: UploadFile = File(...),
     screenshot: str = Form("false"),
+    note_style: str = Form("simple"),
     background_tasks: BackgroundTasks = BackgroundTasks()
 ):
     """上传视频文件并开始生成笔记"""
@@ -124,6 +130,11 @@ async def upload_video(
                     logger.info(f"收到模型配置: provider={model_config_dict.get('provider')}, model={model_config_dict.get('model')}")
                 except Exception as e:
                     logger.warning(f"解析模型配置失败: {e}, 将使用默认配置")
+        
+        # 将 note_style 合并到 model_config 中
+        if model_config_dict is None:
+            model_config_dict = {}
+        model_config_dict["note_style"] = note_style
         
         # 检查文件扩展名
         file_ext = Path(file.filename).suffix.lower()
@@ -222,6 +233,7 @@ def list_tasks(limit: int = 50):
 
 class RegenerateRequest(BaseModel):
     modelConfig: Optional[dict] = None  # 使用驼峰命名，避免与 Pydantic 的 model_config 冲突
+    noteStyle: Optional[str] = None
 
 @router.post("/task/{task_id}/regenerate")
 def regenerate_note(
@@ -268,6 +280,12 @@ def regenerate_note(
                     logger.info(f"从文件加载模型配置: {model_config_dict}")
                 except Exception as e:
                     logger.warning(f"读取模型配置失败: {e}")
+        
+        # 更新 note_style
+        if request and request.noteStyle:
+            if model_config_dict is None:
+                model_config_dict = {}
+            model_config_dict["note_style"] = request.noteStyle
         
         # 保存或更新模型配置到文件
         if model_config_dict:

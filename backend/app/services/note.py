@@ -81,7 +81,8 @@ class NoteGenerator:
         video_path: str,
         filename: str,
         task_id: str,
-        screenshot: bool = False
+        screenshot: bool = False,
+        note_style: str = "simple"
     ) -> Optional[NoteResult]:
         """
         生成笔记的主流程
@@ -89,10 +90,11 @@ class NoteGenerator:
         :param video_path: 视频文件路径
         :param filename: 原始文件名
         :param task_id: 任务 ID
+        :param note_style: 笔记风格 (simple, detailed, academic, creative)
         :return: NoteResult 对象
         """
         try:
-            logger.info(f"开始生成笔记 (task_id={task_id})")
+            logger.info(f"开始生成笔记 (task_id={task_id}, style={note_style})")
             update_task_status(task_id, "processing")
             
             # 1. 提取音频
@@ -104,7 +106,7 @@ class NoteGenerator:
             
             # 3. GPT 生成笔记
             update_task_status(task_id, "summarizing")
-            markdown = self._summarize_text(transcript, filename, task_id, screenshot)
+            markdown = self._summarize_text(transcript, filename, task_id, screenshot, note_style=note_style)
             
             # 清理 AI 输出中的思考过程标签（redacted_reasoning）
             import re
@@ -207,9 +209,9 @@ class NoteGenerator:
         logger.info("转录完成")
         return transcript
     
-    def _summarize_text(self, transcript, filename: str, task_id: str, screenshot: bool = False, use_cache: bool = True) -> str:
+    def _summarize_text(self, transcript, filename: str, task_id: str, screenshot: bool = False, use_cache: bool = True, note_style: str = "simple") -> str:
         """使用 GPT 生成笔记"""
-        logger.info(f"开始生成笔记... (screenshot={screenshot}, use_cache={use_cache})")
+        logger.info(f"开始生成笔记... (screenshot={screenshot}, use_cache={use_cache}, style={note_style})")
         
         # 检查缓存（如果允许使用缓存）
         cache_file = NOTE_OUTPUT_DIR / f"{task_id}_markdown.md"
@@ -231,7 +233,7 @@ class NoteGenerator:
         
         # 调用 GPT（延迟初始化）
         gpt = self._get_gpt()
-        markdown = gpt.summarize(transcript, filename, screenshot)
+        markdown = gpt.summarize(transcript, filename, screenshot, note_style)
         
         # 清理 AI 输出中的思考过程标签（redacted_reasoning）
         # 删除所有 <think>...</think> 标签及其内容

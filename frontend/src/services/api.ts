@@ -20,17 +20,19 @@ export const uploadVideo = async (
     base_url?: string
     model: string
   } | null = null,
+  noteStyle: string = 'simple',
   onProgress?: (progress: number) => void
 ) => {
   const formData = new FormData()
   formData.append('file', file)
   formData.append('screenshot', screenshot.toString())
-  
+  formData.append('note_style', noteStyle)
+
   // 如果提供了模型配置，添加到请求中
   if (modelConfig) {
     formData.append('model_config', JSON.stringify(modelConfig))
   }
-  
+
   const response = await api.post('/upload', formData, {
     headers: {
       'Content-Type': 'multipart/form-data',
@@ -45,7 +47,7 @@ export const uploadVideo = async (
       }
     },
   })
-  
+
   return response
 }
 
@@ -66,11 +68,11 @@ export const confirmStep = async (taskId: string, step: string) => {
 }
 
 // 重新生成笔记
-export const regenerateNote = async (taskId: string) => {
+export const regenerateNote = async (taskId: string, noteStyle?: string) => {
   // 获取当前选择的模型配置
   const selectedModelId = localStorage.getItem('selectedModel')
   const modelConfigs = localStorage.getItem('modelConfigs')
-  
+
   let modelConfig = null
   if (selectedModelId && modelConfigs) {
     try {
@@ -81,7 +83,7 @@ export const regenerateNote = async (taskId: string) => {
         const provider = selectedModelId.substring(0, firstDashIndex)
         const modelId = selectedModelId.substring(firstDashIndex + 1)
         const providerConfig = configs[provider]
-        
+
         if (providerConfig) {
           modelConfig = {
             provider,
@@ -96,10 +98,11 @@ export const regenerateNote = async (taskId: string) => {
       console.error('解析模型配置失败:', e)
     }
   }
-  
+
   // 将模型配置作为请求体传递（使用驼峰命名）
   return await api.post(`/task/${taskId}/regenerate`, {
-    modelConfig: modelConfig
+    modelConfig: modelConfig,
+    noteStyle: noteStyle
   })
 }
 

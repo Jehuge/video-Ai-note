@@ -28,10 +28,10 @@ export default function UploadForm() {
     // 检查文件类型（基于扩展名和 MIME 类型）
     const fileExtension = file.name.split('.').pop()?.toLowerCase()
     const allowedExtensions = ['mp4', 'avi', 'mov', 'mkv', 'webm', 'mp3', 'wav', 'm4a', 'flv', 'wmv']
-    
+
     const isAllowedExtension = fileExtension && allowedExtensions.includes(fileExtension)
     const isAllowedMime = file.type.startsWith('video/') || file.type.startsWith('audio/')
-    
+
     if (!isAllowedExtension && !isAllowedMime) {
       toast.error('不支持的文件类型，请上传视频或音频文件')
       e.target.value = ''
@@ -51,13 +51,14 @@ export default function UploadForm() {
     e.target.value = ''
   }
 
-  const handleConfirmUpload = async (screenshot: boolean) => {
+  const handleConfirmUpload = async (screenshot: boolean, noteStyle: string) => {
     if (!selectedFile) return
+
 
     // 获取当前选择的模型配置
     const selectedModelId = localStorage.getItem('selectedModel')
     const modelConfigs = localStorage.getItem('modelConfigs')
-    
+
     let modelConfig = null
     if (selectedModelId && modelConfigs) {
       try {
@@ -70,7 +71,7 @@ export default function UploadForm() {
           const provider = selectedModelId.substring(0, firstDashIndex)
           const modelId = selectedModelId.substring(firstDashIndex + 1)
           const providerConfig = configs[provider]
-          
+
           if (providerConfig) {
             // 使用从 selectedModelId 解析出来的 modelId
             // 这是用户实际选择的模型
@@ -99,6 +100,7 @@ export default function UploadForm() {
         selectedFile,
         screenshot,
         modelConfig,
+        noteStyle,
         (progress) => {
           setUploadProgress(progress)
         }
@@ -166,7 +168,7 @@ export default function UploadForm() {
               <span className="text-xs text-gray-400 mt-1">
                 支持 MP4, AVI, MOV, MKV, MP3, WAV 等格式（最大 500MB）
               </span>
-            </div> 
+            </div>
           )}
           <input
             type="file"

@@ -4,9 +4,16 @@ import { useState } from 'react'
 interface FileConfirmDialogProps {
   file: File | null
   open: boolean
-  onConfirm: (screenshot: boolean) => void
+  onConfirm: (screenshot: boolean, noteStyle: string) => void
   onCancel: () => void
 }
+
+const STYLE_OPTIONS = [
+  { id: 'simple', label: '简洁模式', desc: '快速浏览，核心要点' },
+  { id: 'detailed', label: '详细模式', desc: '完整记录，深度解析' },
+  { id: 'academic', label: '学术模式', desc: '专业严谨，术语准确' },
+  { id: 'creative', label: '创意模式', desc: '生动活泼，形式多样' },
+]
 
 export default function FileConfirmDialog({
   file,
@@ -15,7 +22,8 @@ export default function FileConfirmDialog({
   onCancel,
 }: FileConfirmDialogProps) {
   const [enableScreenshot, setEnableScreenshot] = useState(true)
-  
+  const [noteStyle, setNoteStyle] = useState('simple')
+
   if (!open || !file) return null
 
   const formatFileSize = (bytes: number) => {
@@ -75,6 +83,27 @@ export default function FileConfirmDialog({
               </label>
             </div>
 
+            <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3 mb-4">
+              <label className="block text-sm font-medium text-indigo-900 mb-2">
+                笔记风格
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                {STYLE_OPTIONS.map((style) => (
+                  <button
+                    key={style.id}
+                    onClick={() => setNoteStyle(style.id)}
+                    className={`text-left px-3 py-2 rounded-md border transition-all ${noteStyle === style.id
+                        ? 'bg-indigo-100 border-indigo-500 ring-1 ring-indigo-500'
+                        : 'bg-white border-gray-200 hover:border-indigo-300'
+                      }`}
+                  >
+                    <div className="text-sm font-medium text-gray-900">{style.label}</div>
+                    <div className="text-xs text-gray-500 mt-0.5">{style.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="flex gap-3">
               <button
                 onClick={onCancel}
@@ -83,7 +112,7 @@ export default function FileConfirmDialog({
                 取消
               </button>
               <button
-                onClick={() => onConfirm(enableScreenshot)}
+                onClick={() => onConfirm(enableScreenshot, noteStyle)}
                 className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
               >
                 <CheckCircle2 className="w-4 h-4" />
