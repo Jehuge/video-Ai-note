@@ -18,6 +18,7 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
   const [steps, setSteps] = useState<any[]>([])
   const [autoProcess, setAutoProcess] = useState(false)
   const [transcript, setTranscript] = useState<any>(null)
+  const [regenerateStyle, setRegenerateStyle] = useState<string>('')
 
   // 初始化步骤
   useEffect(() => {
@@ -46,8 +47,8 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
         status: (task.status === 'pending'
           ? 'waiting_confirm'
           : ['processing', 'transcribing', 'summarizing', 'completed'].includes(task.status)
-          ? 'completed'
-          : 'pending') as StepStatus,
+            ? 'completed'
+            : 'pending') as StepStatus,
         canConfirm: task.status === 'pending',
         onConfirm: () => handleStepConfirm('extract'),
         result: task.status !== 'pending' ? (
@@ -64,10 +65,10 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
         status: (isTranscribeCompleted
           ? 'completed'
           : task.status === 'transcribing'
-          ? 'processing'
-          : task.status === 'processing'
-          ? 'waiting_confirm'
-          : 'pending') as StepStatus,
+            ? 'processing'
+            : task.status === 'processing'
+              ? 'waiting_confirm'
+              : 'pending') as StepStatus,
         canConfirm: task.status === 'processing',
         onConfirm: () => handleStepConfirm('transcribe'),
         result: isTranscribeCompleted ? (
@@ -86,8 +87,8 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
             ? 'processing'
             : 'completed'
           : isTranscribeCompleted || task.status === 'transcribing'
-          ? 'waiting_confirm'
-          : 'pending') as StepStatus,
+            ? 'waiting_confirm'
+            : 'pending') as StepStatus,
         canConfirm: isTranscribeCompleted, // 只有转录完成后才能生成笔记
         onConfirm: () => handleStepConfirm('summarize'),
       },
@@ -99,7 +100,7 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
   // 使用 ref 来避免依赖问题
   const tasksRef = useRef(tasks)
   const updateTaskRef = useRef(updateTask)
-  
+
   useEffect(() => {
     tasksRef.current = tasks
     updateTaskRef.current = updateTask
@@ -110,12 +111,12 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
   // 初始加载任务详情
   useEffect(() => {
     if (!taskId) return
-    
+
     // 防止重复加载同一个任务
     if (taskDetailLoadedRef.current === taskId) {
       return
     }
-    
+
     const loadTaskDetail = async () => {
       taskDetailLoadedRef.current = taskId
       try {
@@ -144,7 +145,7 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
         }
       }
     }
-    
+
     loadTaskDetail()
   }, [taskId])
 
@@ -164,7 +165,7 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
         if (response.data.code === 200) {
           const taskData = response.data.data
           const currentTask = tasksRef.current.find((t) => t.id === taskId)
-          
+
           updateTaskRef.current(taskId, {
             status: taskData.status,
             markdown: taskData.markdown || currentTask?.markdown || '',
@@ -214,12 +215,12 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
             return { ...step, status: 'processing' as StepStatus }
           }
         }
-        
+
         // 提取音频步骤
         if (status === 'processing' && step.id === 'extract') {
           return { ...step, status: 'processing' as StepStatus }
         }
-        
+
         // 如果状态从 processing 变为其他状态，且提取已完成
         if (status !== 'pending' && step.id === 'extract' && step.status === 'processing') {
           return {
@@ -233,12 +234,12 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
             ),
           }
         }
-        
+
         // 生成笔记步骤
         if (status === 'summarizing' && step.id === 'summarize') {
           return { ...step, status: 'processing' as StepStatus }
         }
-        
+
         // 所有步骤完成
         if (status === 'completed') {
           if (step.status === 'processing') {
@@ -281,7 +282,7 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
           step.id === stepId ? { ...step, status: 'processing' as StepStatus } : step
         )
       )
-      
+
       // 调用后端确认步骤（目前后端自动处理，这里主要是触发状态更新）
       await confirmStep(taskId, stepId)
       setAutoProcess(true)
@@ -328,35 +329,48 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold">内容预览</h3>
               {task.status === 'completed' && task.markdown && (
-                <button
-                  onClick={async () => {
-                    try {
-                      await regenerateNote(taskId)
-                      toast.success('正在重新生成笔记...')
-                      setAutoProcess(true)
-                    } catch (error: any) {
-                      toast.error(error.response?.data?.msg || '重新生成失败')
-                    }
-                  }}
-                  className="px-3 py-1.5 text-sm bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
-                >
-                  重新生成笔记
-                </button>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={regenerateStyle}
+                    onChange={(e) => setRegenerateStyle(e.target.value)}
+                    className="text-sm border-gray-300 rounded-md shadow-sm focus:border-blue-300 focus:ring focus:ring-blue-200 focus:ring-opacity-50"
+                  >
+                    <option value="">保持当前风格</option>
+                    <option value="simple">简洁模式</option>
+                    <option value="detailed">详细模式</option>
+                    <option value="academic">学术模式</option>
+                    <option value="creative">创意模式</option>
+                  </select>
+                  <button
+                    onClick={async () => {
+                      try {
+                        await regenerateNote(taskId, regenerateStyle || undefined)
+                        toast.success('正在重新生成笔记...')
+                        setAutoProcess(true)
+                      } catch (error: any) {
+                        toast.error(error.response?.data?.msg || '重新生成失败')
+                      }
+                    }}
+                    className="px-3 py-1.5 text-sm bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
+                  >
+                    重新生成笔记
+                  </button>
+                </div>
               )}
             </div>
-            
+
             <div className="h-full flex flex-col">
               {(() => {
                 // 优先显示笔记（如果存在且已完成）
                 if (task.markdown && (task.status === 'completed' || task.markdown.length > 0)) {
                   return <EnhancedMarkdownViewer markdown={task.markdown} filename={task.filename} taskId={taskId} />
                 }
-                
+
                 // 其次显示转写结果（如果存在）
                 if (transcript && transcript.segments && transcript.segments.length > 0) {
                   return <TranscriptViewer transcript={transcript} />
                 }
-                
+
                 // 处理中显示加载
                 if (task.status === 'processing' || task.status === 'transcribing' || task.status === 'summarizing') {
                   return (
@@ -368,7 +382,7 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
                     </div>
                   )
                 }
-                
+
                 // 等待状态
                 return (
                   <div className="flex h-full items-center justify-center text-gray-400">
