@@ -1,19 +1,18 @@
 import { useEffect, useState, useRef } from 'react'
-import { FileVideo, Music, FileText, BookOpen, RotateCcw, Eye } from 'lucide-react'
+import { FileVideo, Music, FileText, BookOpen, RotateCcw, Eye, Play } from 'lucide-react'
 import { useTaskStore } from '../store/taskStore'
 import { getTaskStatus, confirmStep, regenerateNote } from '../services/api'
 import StepProgress, { StepStatus } from './StepProgress'
 import ContentPreviewModal from './ContentPreviewModal'
 import toast from 'react-hot-toast'
-import UploadZone from './UploadZone'
 
 interface TaskStepsProps {
-  taskId?: string | null
+  taskId: string
 }
 
 export default function TaskSteps({ taskId }: TaskStepsProps) {
   const { tasks, updateTask } = useTaskStore()
-  const task = taskId ? tasks.find((t) => t.id === taskId) : null
+  const task = tasks.find((t) => t.id === taskId)
   const [steps, setSteps] = useState<any[]>([])
   const [autoProcess, setAutoProcess] = useState(false)
   const [transcript, setTranscript] = useState<any>(null)
@@ -33,44 +32,7 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
 
   // 初始化步骤
   useEffect(() => {
-    // 如果没有任务，显示初始状态（等待上传）
-    if (!task) {
-      const initialSteps = [
-        {
-          id: 'upload',
-          name: '文件上传',
-          description: '将文件上传到服务器',
-          status: 'waiting_confirm' as StepStatus,
-          customControl: (
-            <div className="mt-4">
-              <UploadZone onUploadSuccess={(newTaskId) => {
-                useTaskStore.getState().setCurrentTask(newTaskId)
-              }} />
-            </div>
-          )
-        },
-        {
-          id: 'extract',
-          name: '提取音频',
-          description: '从视频文件中提取音频（如果是视频）',
-          status: 'pending' as StepStatus,
-        },
-        {
-          id: 'transcribe',
-          name: '音频转写',
-          description: '使用 AI 将音频转换为文字',
-          status: 'pending' as StepStatus,
-        },
-        {
-          id: 'summarize',
-          name: '生成笔记',
-          description: '使用 GPT 生成结构化笔记',
-          status: 'pending' as StepStatus,
-        }
-      ]
-      setSteps(initialSteps)
-      return
-    }
+    if (!task) return
 
     const isTranscribeCompleted = transcript && transcript.segments && transcript.segments.length > 0
 
@@ -188,7 +150,7 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
               )
             )
 
-            await regenerateNote(taskId!, noteStyle)
+            await regenerateNote(taskId, noteStyle)
             setAutoProcess(true)
           } catch (error: any) {
             console.error('开始生成笔记失败:', error)
@@ -201,25 +163,44 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
           }
         },
         customControl: (
-          <div className="mt-3 flex items-center gap-3">
-            <select
-              value={noteStyle}
-              onChange={(e) => setNoteStyle(e.target.value)}
-              className="block w-40 rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border"
-              onClick={(e) => e.stopPropagation()}
+          <div className="mt-4 flex flex-col sm:flex-row gap-3">
+            <div className="relative">
+              <select
+                value={noteStyle}
+                onChange={(e) => setNoteStyle(e.target.value)}
+                className="appearance-none block w-full sm:w-48 pl-4 pr-10 py-2.5 text-sm border border-slate-200 rounded-lg bg-slate-50 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all cursor-pointer hover:bg-white hover:border-blue-300"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {noteStyles.map((style) => (
+                  <option key={style.value} value={style.value}>
+                    {style.label}
+                  </option>
+                ))}
+              </select>
+              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-500">
+                <svg className="h-4 w-4 fill-current" viewBox="0 0 20 20">
+                  <path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" />
+                </svg>
+              </div>
+            </div>
+
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                // Start generation
+                handleStepConfirm('summarize')
+              }}
+              className="flex-1 sm:flex-none px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-all shadow-sm shadow-blue-600/20 flex items-center justify-center gap-2"
             >
-              {noteStyles.map((style) => (
-                <option key={style.value} value={style.value}>
-                  {style.label}
-                </option>
-              ))}
-            </select>
+              <Play className="w-4 h-4 fill-current" />
+              开始生成
+            </button>
           </div>
         ),
         result: task.markdown && task.status === 'completed' ? (
           <div className="flex flex-col gap-3">
-            <div className="flex items-center justify-between text-sm text-green-600">
-              <div className="flex items-center gap-2">
+            <div className="flex items-center justify-between text-sm text-emerald-600 p-3 bg-emerald-50 rounded-lg border border-emerald-100">
+              <div className="flex items-center gap-2 font-medium">
                 <BookOpen className="w-4 h-4" />
                 <span>笔记生成完成</span>
               </div>
@@ -233,10 +214,10 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
                     })
                   }
                 }}
-                className="flex items-center gap-1 px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white text-emerald-700 rounded-md border border-emerald-200 hover:bg-emerald-50 hover:border-emerald-300 transition-all shadow-sm"
                 title="查看笔记"
               >
-                <Eye className="w-3 h-3" />
+                <Eye className="w-3.5 h-3.5" />
                 查看
               </button>
             </div>
@@ -252,18 +233,26 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
           }
         } : undefined,
         completedControl: (
-          <div className="mt-3 pt-3 border-t border-gray-100 flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
-            <select
-              value={noteStyle}
-              onChange={(e) => setNoteStyle(e.target.value)}
-              className="block w-40 rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-xs p-1.5 border"
-            >
-              {noteStyles.map((style) => (
-                <option key={style.value} value={style.value}>
-                  {style.label}
-                </option>
-              ))}
-            </select>
+          <div className="mt-4 pt-4 border-t border-slate-100 flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
+            <div className="relative">
+              <select
+                value={noteStyle}
+                onChange={(e) => setNoteStyle(e.target.value)}
+                className="appearance-none block w-full sm:w-40 pl-3 pr-8 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all cursor-pointer hover:border-blue-300 shadow-sm"
+              >
+                {noteStyles.map((style) => (
+                  <option key={style.value} value={style.value}>
+                    {style.label}
+                  </option>
+                ))}
+              </select>
+              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-slate-400">
+                <svg className="h-3 w-3 fill-current" viewBox="0 0 20 20">
+                  <path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" />
+                </svg>
+              </div>
+            </div>
+
             <button
               onClick={async (e) => {
                 e.stopPropagation()
@@ -274,7 +263,7 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
                     )
                   )
 
-                  await regenerateNote(taskId!, noteStyle)
+                  await regenerateNote(taskId, noteStyle)
                   toast.success('正在重新生成笔记...')
                   setAutoProcess(true)
                 } catch (error: any) {
@@ -288,9 +277,9 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
                   }
                 }
               }}
-              className="flex items-center gap-1 px-3 py-1.5 text-xs bg-blue-50 text-blue-600 border border-blue-200 rounded hover:bg-blue-100 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-white text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 hover:text-blue-600 hover:border-blue-200 hover:shadow-sm transition-all shadow-sm"
             >
-              <RotateCcw className="w-3 h-3" />
+              <RotateCcw className="w-3.5 h-3.5" />
               重新生成
             </button>
           </div>
@@ -547,7 +536,7 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
         )
       )
 
-      await confirmStep(taskId!, stepId)
+      await confirmStep(taskId, stepId)
       setAutoProcess(true)
     } catch (error) {
       console.error('确认步骤失败:', error)
@@ -559,7 +548,7 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
     }
   }
 
-  if (!task && taskId) {
+  if (!task) {
     return (
       <div className="h-full flex items-center justify-center text-gray-400">
         <p>任务不存在</p>
@@ -576,23 +565,17 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
         <div className="bg-white border-b border-gray-200 px-6 py-4 shrink-0">
           <div className="flex items-center justify-between">
             <div className="flex-1 min-w-0">
-              <h2 className="text-xl font-semibold text-gray-900 truncate" title={task?.filename || '新建任务'}>{task?.filename || '新建任务'}</h2>
-              {task && <p className="text-sm text-gray-500 mt-1">任务 ID: {task.id.slice(0, 8)}...</p>}
+              <h2 className="text-xl font-semibold text-gray-900 truncate" title={task.filename}>{task.filename}</h2>
+              <p className="text-sm text-gray-500 mt-1">任务 ID: {task.id.slice(0, 8)}...</p>
             </div>
-            {task?.status === 'completed' && task.markdown && (
-              // 顶部重新生成按钮已移动到生成笔记步骤中
-              null
-            )}
           </div>
         </div>
 
         {/* 步骤区域 */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-6 bg-slate-50">
           <div className="max-w-4xl mx-auto">
-            <div className="bg-white rounded-xl border border-gray-200 p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-6">处理步骤</h3>
-              <StepProgress steps={steps} currentStep={currentStepIndex} />
-            </div>
+            <h3 className="text-lg font-semibold text-gray-900 mb-6 px-1">处理步骤</h3>
+            <StepProgress steps={steps} currentStep={currentStepIndex} />
           </div>
         </div>
       </div>
@@ -603,8 +586,8 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
           type={previewContent.type}
           content={previewContent.content}
           title={previewContent.title}
-          filename={task?.filename || ''}
-          taskId={taskId || ''}
+          filename={task.filename}
+          taskId={taskId}
           onClose={() => setPreviewContent(null)}
         />
       )}

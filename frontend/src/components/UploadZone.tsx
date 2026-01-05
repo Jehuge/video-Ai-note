@@ -148,46 +148,50 @@ export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
                 onDragLeave={handleDragLeave}
                 onDrop={handleDrop}
                 className={`
-          relative group cursor-pointer overflow-hidden rounded-xl border-2 border-dashed transition-all duration-300
+          relative group cursor-pointer overflow-hidden rounded-2xl border-2 border-dashed transition-all duration-300 ease-out
           ${isDragOver
-                        ? 'border-blue-500 bg-blue-50 scale-[1.01]'
-                        : 'border-blue-200 bg-white hover:border-blue-400 hover:bg-blue-50/50 hover:shadow-md'
+                        ? 'border-blue-500 bg-blue-50/50 scale-[1.01] shadow-xl ring-4 ring-blue-500/10'
+                        : 'border-slate-200 bg-white hover:border-blue-400 hover:bg-slate-50 hover:shadow-lg hover:-translate-y-0.5'
                     }
           ${uploading ? 'pointer-events-none opacity-80' : ''}
         `}
             >
-                <div className="p-8 flex flex-col items-center justify-center text-center">
+                <div className="p-12 flex flex-col items-center justify-center text-center">
                     <div className={`
-            p-4 rounded-full mb-4 transition-colors duration-300
-            ${isDragOver ? 'bg-blue-100' : 'bg-blue-50 group-hover:bg-blue-100'}
+            p-5 rounded-full mb-6 transition-all duration-300 transform group-hover:scale-110
+            ${isDragOver ? 'bg-blue-100 rotate-12' : 'bg-slate-50 group-hover:bg-blue-50 text-slate-400 group-hover:text-blue-500'}
           `}>
                         {uploading ? (
-                            <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+                            <Loader2 className="w-10 h-10 animate-spin" />
                         ) : (
-                            <UploadCloud className="w-8 h-8 text-blue-600" />
+                            <UploadCloud className="w-10 h-10" />
                         )}
                     </div>
 
                     {uploading ? (
-                        <div className="w-full max-w-[200px]">
-                            <div className="text-sm font-medium text-blue-900 mb-1">正在上传...</div>
-                            <div className="text-xs text-blue-600 mb-2">{uploadProgress}%</div>
-                            <div className="h-1 bg-blue-100 rounded-full overflow-hidden">
+                        <div className="w-full max-w-[240px]">
+                            <div className="text-base font-semibold text-slate-900 mb-2">正在上传您的视频...</div>
+                            <div className="flex items-center justify-between text-xs text-slate-500 mb-2 font-medium">
+                                <span>{uploadProgress}%</span>
+                                <span>请稍候</span>
+                            </div>
+                            <div className="h-2 bg-slate-100 rounded-full overflow-hidden ring-1 ring-slate-900/5">
                                 <div
-                                    className="h-full bg-blue-500 transition-all duration-300"
+                                    className="h-full bg-blue-500 transition-all duration-300 ease-out rounded-full"
                                     style={{ width: `${uploadProgress}%` }}
                                 />
                             </div>
                         </div>
                     ) : (
-                        <>
-                            <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                        <div className="space-y-2">
+                            <h3 className="text-xl font-bold text-slate-900 tracking-tight group-hover:text-blue-600 transition-colors">
                                 {isDragOver ? '释放文件以开始' : '点击或拖拽上传'}
                             </h3>
-                            <p className="text-sm text-gray-500">
-                                支持 MP4, AVI, MP3, WAV 等视频/音频文件
+                            <p className="text-sm text-slate-500 max-w-xs mx-auto leading-relaxed">
+                                支持 MP4, AVI, MP3, WAV 等主流格式<br />
+                                <span className="text-xs text-slate-400 mt-1 inline-block">单文件最大支持 500MB</span>
                             </p>
-                        </>
+                        </div>
                     )}
                 </div>
 

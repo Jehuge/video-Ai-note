@@ -46,8 +46,24 @@ export default function MainContent({ activeMenu }: MainContentProps) {
 
         {/* 右侧：上传 + 步骤区域 */}
         <main className="flex-1 flex flex-col overflow-hidden bg-gray-50">
+          {/* 顶部上传区域 */}
+          <div className="p-6 pb-0 shrink-0">
+            <UploadZone
+              onUploadSuccess={(taskId) => {
+                // 自动选中新任务
+                useTaskStore.getState().setCurrentTask(taskId)
+              }}
+            />
+          </div>
+
           <div className="flex-1 overflow-y-auto p-6">
-            <TaskSteps taskId={currentTaskId} />
+            {currentTaskId ? (
+              <TaskSteps taskId={currentTaskId} />
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center text-gray-400">
+                <p>请选择一个任务查看详情，或上传新文件</p>
+              </div>
+            )}
           </div>
         </main>
       </div>

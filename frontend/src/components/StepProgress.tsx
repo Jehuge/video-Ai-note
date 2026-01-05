@@ -24,28 +24,30 @@ export default function StepProgress({ steps, currentStep }: StepProgressProps) 
   const getStepIcon = (status: StepStatus) => {
     switch (status) {
       case 'completed':
-        return <CheckCircle2 className="w-5 h-5 text-green-500" />
+        return <CheckCircle2 className="w-5 h-5 text-white" />
       case 'processing':
-        return <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
+        return <Loader2 className="w-5 h-5 text-blue-600 animate-spin" />
       case 'failed':
-        return <XCircle className="w-5 h-5 text-red-500" />
+        return <XCircle className="w-5 h-5 text-white" />
       case 'waiting_confirm':
-        return <Play className="w-5 h-5 text-orange-500" />
+        return <Play className="w-5 h-5 text-white ml-0.5" /> // ml-0.5 for visual centering
       default:
-        return <Circle className="w-5 h-5 text-gray-400" />
+        return <Circle className="w-5 h-5 text-slate-400" />
     }
   }
 
-  const getStepColor = (status: StepStatus, isCurrent: boolean) => {
-    if (isCurrent && status === 'processing') return 'border-blue-500 bg-blue-50'
-    if (status === 'completed') return 'border-green-500 bg-green-50'
-    if (status === 'failed') return 'border-red-500 bg-red-50'
-    if (status === 'waiting_confirm') return 'border-orange-500 bg-orange-50'
-    return 'border-gray-300 bg-white'
+  const getStepIconBg = (status: StepStatus) => {
+    switch (status) {
+      case 'completed': return 'bg-emerald-500 shadow-emerald-200'
+      case 'processing': return 'bg-blue-50 ring-2 ring-blue-500/20'
+      case 'failed': return 'bg-red-500 shadow-red-200'
+      case 'waiting_confirm': return 'bg-amber-500 shadow-amber-200'
+      default: return 'bg-slate-100'
+    }
   }
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
       {steps.map((step, index) => {
         const isCurrent = currentStep === index
         const isActive = step.status === 'processing' || isCurrent
@@ -53,62 +55,88 @@ export default function StepProgress({ steps, currentStep }: StepProgressProps) 
         return (
           <div
             key={step.id}
-            className={`border-2 rounded-lg p-4 transition-all ${getStepColor(
-              step.status,
-              isCurrent
-            )} ${step.onClick ? 'cursor-pointer hover:shadow-md' : ''}`}
+            className={`
+              relative overflow-hidden rounded-xl border transition-all duration-300 ease-out p-5
+              ${isActive
+                ? 'bg-white border-blue-500/30 shadow-lg shadow-blue-500/5 ring-1 ring-blue-500/10 scale-[1.01]'
+                : 'bg-white border-slate-200 shadow-sm hover:shadow-md hover:border-blue-200'
+              }
+              ${step.onClick ? 'cursor-pointer' : ''}
+            `}
             onClick={step.onClick}
           >
-            <div className="flex items-start gap-3">
-              <div className="flex-shrink-0 mt-0.5">{getStepIcon(step.status)}</div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between">
-                  <h4
-                    className={`font-medium ${isActive ? 'text-blue-900' : 'text-gray-700'
-                      }`}
-                  >
+            {/* Progress Bar Background (Optional Visual Flair) */}
+            {step.status === 'processing' && (
+              <div className="absolute top-0 left-0 w-full h-1 bg-blue-50">
+                <div className="h-full bg-blue-500/50 animate-pulse w-1/3 rounded-r-full" />
+              </div>
+            )}
+
+            <div className="flex gap-4">
+              {/* Icon Container */}
+              <div className={`
+                flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center transition-all duration-300
+                ${getStepIconBg(step.status)}
+                ${step.status === 'completed' || step.status === 'failed' || step.status === 'waiting_confirm' ? 'shadow-lg ring-2 ring-white' : ''}
+              `}>
+                {getStepIcon(step.status)}
+              </div>
+
+              <div className="flex-1 min-w-0 pt-1">
+                <div className="flex items-center justify-between mb-1">
+                  <h4 className={`text-base font-semibold tracking-tight ${isActive ? 'text-slate-900' : 'text-slate-700'}`}>
                     {index + 1}. {step.name}
                   </h4>
+
+                  {/* Status Badges */}
                   {step.status === 'processing' && (
-                    <span className="text-xs text-blue-600 bg-blue-100 px-2 py-1 rounded">
-                      进行中...
+                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 ring-1 ring-blue-700/10">
+                      进行中
                     </span>
                   )}
                   {step.status === 'waiting_confirm' && (
-                    <span className="text-xs text-orange-600 bg-orange-100 px-2 py-1 rounded">
-                      等待确认
+                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 ring-1 ring-amber-700/10 animate-pulse">
+                      需确认
                     </span>
                   )}
                 </div>
-                <p className="text-sm text-gray-600 mt-1">{step.description}</p>
 
-                {/* 显示结果 */}
-                {step.result && step.status === 'completed' && (
-                  <div className="mt-3 p-3 bg-white rounded border border-gray-200">
-                    {step.result}
-                  </div>
-                )}
+                <p className="text-sm text-slate-500 leading-relaxed line-clamp-2">
+                  {step.description}
+                </p>
 
-                {/* 确认按钮 */}
-                {/* 确认按钮 或 自定义控制 */}
-                {step.status === 'waiting_confirm' && (
-                  step.customControl ? (
-                    <div className="mt-3">{step.customControl}</div>
-                  ) : step.canConfirm && step.onConfirm ? (
-                    <button
-                      onClick={step.onConfirm}
-                      className="mt-3 px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
-                    >
-                      <Play className="w-4 h-4" />
-                      开始此步骤
-                    </button>
-                  ) : null
-                )}
+                {/* Content Area */}
+                <div className="mt-4 space-y-3">
+                  {/* Result Display */}
+                  {step.result && step.status === 'completed' && (
+                    <div className="p-3 bg-slate-50/80 rounded-lg border border-slate-100/50 backdrop-blur-sm">
+                      {step.result}
+                    </div>
+                  )}
 
-                {/* 完成后的额外控制 */}
-                {step.status === 'completed' && step.completedControl && (
-                  <div className="mt-3">{step.completedControl}</div>
-                )}
+                  {/* Controls */}
+                  {step.status === 'waiting_confirm' && (
+                    step.customControl ? (
+                      <div className="pt-1">{step.customControl}</div>
+                    ) : step.canConfirm && step.onConfirm ? (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          step.onConfirm?.()
+                        }}
+                        className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-sm font-medium rounded-lg transition-colors shadow-sm shadow-blue-600/20"
+                      >
+                        <Play className="w-4 h-4 fill-current" />
+                        开始处理
+                      </button>
+                    ) : null
+                  )}
+
+                  {/* Completed Controls */}
+                  {step.status === 'completed' && step.completedControl && (
+                    <div className="pt-1">{step.completedControl}</div>
+                  )}
+                </div>
               </div>
             </div>
           </div>
