@@ -63,7 +63,8 @@ export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
         if (file) handleFile(file)
     }
 
-    const handleConfirmUpload = async (screenshot: boolean, noteStyle: string) => {
+    const handleConfirmUpload = async (screenshot: boolean) => {
+        const noteStyle = 'simple'
         if (!selectedFile) return
 
         // 获取模型配置 logic

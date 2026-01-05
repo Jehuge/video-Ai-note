@@ -11,6 +11,8 @@ interface Step {
   onConfirm?: () => void
   result?: any
   onClick?: () => void
+  customControl?: React.ReactNode
+  completedControl?: React.ReactNode
 }
 
 interface StepProgressProps {
@@ -88,14 +90,24 @@ export default function StepProgress({ steps, currentStep }: StepProgressProps) 
                 )}
 
                 {/* 确认按钮 */}
-                {step.canConfirm && step.status === 'waiting_confirm' && step.onConfirm && (
-                  <button
-                    onClick={step.onConfirm}
-                    className="mt-3 px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
-                  >
-                    <Play className="w-4 h-4" />
-                    开始此步骤
-                  </button>
+                {/* 确认按钮 或 自定义控制 */}
+                {step.status === 'waiting_confirm' && (
+                  step.customControl ? (
+                    <div className="mt-3">{step.customControl}</div>
+                  ) : step.canConfirm && step.onConfirm ? (
+                    <button
+                      onClick={step.onConfirm}
+                      className="mt-3 px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
+                    >
+                      <Play className="w-4 h-4" />
+                      开始此步骤
+                    </button>
+                  ) : null
+                )}
+
+                {/* 完成后的额外控制 */}
+                {step.status === 'completed' && step.completedControl && (
+                  <div className="mt-3">{step.completedControl}</div>
                 )}
               </div>
             </div>

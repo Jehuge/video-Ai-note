@@ -1,9 +1,8 @@
 import { useEffect, useState, useRef } from 'react'
-import { Plus, UploadCloud, FileVideo, Calendar, Trash2, Loader2, CheckCircle2, AlertCircle, Clock, XCircle } from 'lucide-react'
+import { FileVideo, Calendar, Trash2, Loader2, CheckCircle2, AlertCircle, Clock } from 'lucide-react'
 import { useTaskStore } from '../store/taskStore'
-import { getTasks, deleteTask, uploadVideo } from '../services/api'
+import { getTasks, deleteTask } from '../services/api'
 import toast from 'react-hot-toast'
-import FileConfirmDialog from './FileConfirmDialog'
 
 const statusIcons = {
   completed: <CheckCircle2 className="w-4 h-4 text-green-500" />,
@@ -14,27 +13,12 @@ const statusIcons = {
   summarizing: <Loader2 className="w-4 h-4 animate-spin text-blue-500" />,
 }
 
-const statusText = {
-  pending: '等待中',
-  processing: '处理中',
-  transcribing: '转写中',
-  summarizing: '生成中',
-  completed: '已完成',
-  failed: '失败',
-}
+
 
 export default function TaskList() {
-  const { tasks, currentTaskId, setCurrentTask, loadTasks, removeTask, addTask } = useTaskStore()
+  const { tasks, currentTaskId, setCurrentTask, loadTasks, removeTask } = useTaskStore()
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set())
   const tasksLoadedRef = useRef(false)
-
-  // 上传相关状态
-  const [uploading, setUploading] = useState(false)
-  const [uploadProgress, setUploadProgress] = useState(0)
-  const [selectedFile, setSelectedFile] = useState<File | null>(null)
-  const [showConfirm, setShowConfirm] = useState(false)
-  const [isDragOver, setIsDragOver] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // 加载任务列表
   useEffect(() => {
@@ -103,216 +87,13 @@ export default function TaskList() {
     }
   }
 
-  // 处理文件选择
-  const handleFile = (file: File) => {
-    // 检查文件类型（基于扩展名和 MIME 类型）
-    const fileExtension = file.name.split('.').pop()?.toLowerCase()
-    const allowedExtensions = ['mp4', 'avi', 'mov', 'mkv', 'webm', 'mp3', 'wav', 'm4a', 'flv', 'wmv']
-
-    const isAllowedExtension = fileExtension && allowedExtensions.includes(fileExtension)
-    const isAllowedMime = file.type.startsWith('video/') || file.type.startsWith('audio/')
-
-    if (!isAllowedExtension && !isAllowedMime) {
-      toast.error('不支持的文件类型，请上传视频或音频文件')
-      return
-    }
-
-    // 检查文件大小（限制 500MB）
-    if (file.size > 500 * 1024 * 1024) {
-      toast.error('文件大小不能超过 500MB')
-      return
-    }
-
-    // 显示确认对话框
-    setSelectedFile(file)
-    setShowConfirm(true)
-  }
-
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (file) {
-      handleFile(file)
-    }
-    e.target.value = ''
-  }
-
-  // 拖拽处理
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragOver(true)
-  }
-
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragOver(false)
-  }
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragOver(false)
-    const file = e.dataTransfer.files[0]
-    if (file) {
-      handleFile(file)
-    }
-  }
-
-  // 确认上传
-  const handleConfirmUpload = async (screenshot: boolean, noteStyle: string) => {
-    if (!selectedFile) return
-
-    // 获取当前选择的模型配置
-    const selectedModelId = localStorage.getItem('selectedModel')
-    const modelConfigs = localStorage.getItem('modelConfigs')
-
-    let modelConfig = null
-    if (selectedModelId && modelConfigs) {
-      try {
-        const configs = JSON.parse(modelConfigs)
-        // 从 selectedModelId 中提取 provider 和 modelId
-        const firstDashIndex = selectedModelId.indexOf('-')
-        if (firstDashIndex > 0) {
-          const provider = selectedModelId.substring(0, firstDashIndex)
-          const modelId = selectedModelId.substring(firstDashIndex + 1)
-          const providerConfig = configs[provider]
-
-          if (providerConfig) {
-            modelConfig = {
-              provider,
-              api_key: providerConfig.apiKey || '',
-              base_url: providerConfig.baseUrl || '',
-              model: modelId,
-            }
-          }
-        }
-      } catch (e) {
-        console.error('解析模型配置失败:', e)
-      }
-    }
-
-    setShowConfirm(false)
-    setUploading(true)
-    setUploadProgress(0)
-
-    try {
-      const response = await uploadVideo(
-        selectedFile,
-        screenshot,
-        modelConfig,
-        noteStyle,
-        (progress) => {
-          setUploadProgress(progress)
-        }
-      )
-
-      if (response.data.code === 200) {
-        const { task_id, filename } = response.data.data
-
-        // 添加到任务列表
-        addTask({
-          id: task_id,
-          filename,
-          status: 'pending',
-          markdown: '',
-          createdAt: new Date().toISOString()
-        })
-
-        // 自动选中新任务
-        setCurrentTask(task_id)
-
-        toast.success('文件上传成功！')
-        setSelectedFile(null)
-      } else {
-        toast.error(response.data.msg || '上传失败')
-      }
-    } catch (error: any) {
-      console.error('上传失败:', error)
-      if (error.code === 'ECONNABORTED') {
-        toast.error('上传超时，请检查网络连接或文件大小')
-      } else {
-        toast.error(error.response?.data?.msg || '上传失败，请稍后重试')
-      }
-    } finally {
-      setUploading(false)
-      setUploadProgress(0)
-    }
-  }
-
-  const handleCancelUpload = () => {
-    setShowConfirm(false)
-    setSelectedFile(null)
-  }
-
-  // 触发文件选择
-  const triggerFileUpload = () => {
-    fileInputRef.current?.click()
-  }
-
   return (
     <div className="flex flex-col h-full bg-gray-50/50">
-      <div className="p-4 shrink-0">
-        <h2 className="text-lg font-bold text-gray-900 mb-4 px-1">我的任务</h2>
-
-        {/* 拖拽上传区域 */}
-        <div
-          onClick={triggerFileUpload}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-          className={`
-            relative group cursor-pointer overflow-hidden rounded-xl border-2 border-dashed transition-all duration-300
-            ${isDragOver
-              ? 'border-blue-500 bg-blue-50 scale-[1.02]'
-              : 'border-blue-200 bg-white hover:border-blue-400 hover:bg-blue-50/50 hover:shadow-md'
-            }
-            ${uploading ? 'pointer-events-none opacity-80' : ''}
-          `}
-        >
-          <div className="p-6 flex flex-col items-center justify-center text-center">
-            <div className={`
-              p-3 rounded-full mb-3 transition-colors duration-300
-              ${isDragOver ? 'bg-blue-100' : 'bg-blue-50 group-hover:bg-blue-100'}
-            `}>
-              {uploading ? (
-                <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
-              ) : (
-                <UploadCloud className="w-6 h-6 text-blue-600" />
-              )}
-            </div>
-
-            {uploading ? (
-              <div className="w-full max-w-[140px]">
-                <div className="text-sm font-medium text-blue-900 mb-1">正在上传...</div>
-                <div className="text-xs text-blue-600 mb-2">{uploadProgress}%</div>
-                <div className="h-1 bg-blue-100 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-blue-500 transition-all duration-300"
-                    style={{ width: `${uploadProgress}%` }}
-                  />
-                </div>
-              </div>
-            ) : (
-              <>
-                <h3 className="text-sm font-semibold text-gray-900 mb-1">
-                  {isDragOver ? '释放文件以开始' : '点击或拖拽上传'}
-                </h3>
-                <p className="text-xs text-gray-500 px-2 leading-relaxed">
-                  支持视频与音频文件<br />自动生成 AI 笔记
-                </p>
-              </>
-            )}
-          </div>
-
-          <input
-            type="file"
-            ref={fileInputRef}
-            className="hidden"
-            onChange={handleFileSelect}
-            disabled={uploading}
-          />
-        </div>
+      <div className="p-4 shrink-0 border-b border-gray-200">
+        <h2 className="text-lg font-bold text-gray-900 px-1">我的任务</h2>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 pb-4">
+      <div className="flex-1 overflow-y-auto px-4 py-4">
         {tasks.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-48 text-center border-2 border-dashed border-gray-100 rounded-xl bg-white/50">
             <div className="p-3 bg-gray-50 rounded-full mb-3">
@@ -339,14 +120,14 @@ export default function TaskList() {
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-2">
+                    <div className="flex items-start gap-2 mb-2">
                       <div className={`
-                      p-1.5 rounded-lg shrink-0
+                      p-1.5 rounded-lg shrink-0 mt-0.5
                       ${currentTaskId === task.id ? 'bg-blue-50 text-blue-600' : 'bg-gray-50 text-gray-500 group-hover:bg-blue-50 group-hover:text-blue-500'}
                     `}>
                         <FileVideo className="w-4 h-4" />
                       </div>
-                      <h3 className={`text-sm font-semibold truncate transition-colors ${currentTaskId === task.id ? 'text-blue-700' : 'text-gray-900 group-hover:text-blue-700'
+                      <h3 className={`text-sm font-semibold transition-colors flex-1 min-w-0 break-all ${currentTaskId === task.id ? 'text-blue-700' : 'text-gray-900 group-hover:text-blue-700'
                         }`}
                         title={task.filename}
                       >
@@ -403,13 +184,6 @@ export default function TaskList() {
           </div>
         )}
       </div>
-
-      <FileConfirmDialog
-        file={selectedFile}
-        open={showConfirm}
-        onConfirm={handleConfirmUpload}
-        onCancel={handleCancelUpload}
-      />
     </div>
   )
 }
