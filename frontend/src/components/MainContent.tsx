@@ -1,9 +1,7 @@
 import { useTaskStore } from '../store/taskStore'
-import UploadForm from './UploadForm'
 import TaskList from './TaskList'
 import TaskSteps from './TaskSteps'
 import ModelConfig from './ModelConfig'
-import UploadPage from './UploadPage'
 
 interface MainContentProps {
   activeMenu: 'home' | 'upload' | 'model' | 'settings'
@@ -12,9 +10,6 @@ interface MainContentProps {
 export default function MainContent({ activeMenu }: MainContentProps) {
   const { currentTaskId } = useTaskStore()
 
-  if (activeMenu === 'upload') {
-    return <UploadPage />
-  }
 
   if (activeMenu === 'model') {
     return <ModelConfig />

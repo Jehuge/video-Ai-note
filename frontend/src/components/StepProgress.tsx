@@ -62,9 +62,8 @@ export default function StepProgress({ steps, currentStep }: StepProgressProps) 
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between">
                   <h4
-                    className={`font-medium ${
-                      isActive ? 'text-blue-900' : 'text-gray-700'
-                    }`}
+                    className={`font-medium ${isActive ? 'text-blue-900' : 'text-gray-700'
+                      }`}
                   >
                     {index + 1}. {step.name}
                   </h4>
@@ -80,14 +79,14 @@ export default function StepProgress({ steps, currentStep }: StepProgressProps) 
                   )}
                 </div>
                 <p className="text-sm text-gray-600 mt-1">{step.description}</p>
-                
+
                 {/* 显示结果 */}
                 {step.result && step.status === 'completed' && (
                   <div className="mt-3 p-3 bg-white rounded border border-gray-200">
                     {step.result}
                   </div>
                 )}
-                
+
                 {/* 确认按钮 */}
                 {step.canConfirm && step.status === 'waiting_confirm' && step.onConfirm && (
                   <button

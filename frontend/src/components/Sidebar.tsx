@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Home, Settings, Bot, Upload, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Home, Settings, Bot, ChevronLeft, ChevronRight } from 'lucide-react'
 
 interface SidebarProps {
   activeMenu: 'home' | 'upload' | 'model' | 'settings'
@@ -12,13 +12,8 @@ export default function Sidebar({ activeMenu, onMenuChange }: SidebarProps) {
   const menuItems = [
     {
       id: 'home' as const,
-      name: '首页',
+      name: '任务',
       icon: <Home className="w-5 h-5" />,
-    },
-    {
-      id: 'upload' as const,
-      name: '上传',
-      icon: <Upload className="w-5 h-5" />,
     },
     {
       id: 'model' as const,
@@ -55,11 +50,10 @@ export default function Sidebar({ activeMenu, onMenuChange }: SidebarProps) {
             <button
               key={item.id}
               onClick={() => onMenuChange(item.id)}
-              className={`w-full flex items-center gap-3 px-3 py-3 rounded-lg transition-colors ${
-                activeMenu === item.id
-                  ? 'bg-blue-50 text-blue-700 font-medium'
-                  : 'text-gray-700 hover:bg-gray-50'
-              }`}
+              className={`w-full flex items-center gap-3 px-3 py-3 rounded-lg transition-colors ${activeMenu === item.id
+                ? 'bg-blue-50 text-blue-700 font-medium'
+                : 'text-gray-700 hover:bg-gray-50'
+                }`}
               title={collapsed ? item.name : undefined}
             >
               {item.icon}

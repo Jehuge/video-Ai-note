@@ -93,8 +93,8 @@ export default function FileConfirmDialog({
                     key={style.id}
                     onClick={() => setNoteStyle(style.id)}
                     className={`text-left px-3 py-2 rounded-md border transition-all ${noteStyle === style.id
-                        ? 'bg-indigo-100 border-indigo-500 ring-1 ring-indigo-500'
-                        : 'bg-white border-gray-200 hover:border-indigo-300'
+                      ? 'bg-indigo-100 border-indigo-500 ring-1 ring-indigo-500'
+                      : 'bg-white border-gray-200 hover:border-indigo-300'
                       }`}
                   >
                     <div className="text-sm font-medium text-gray-900">{style.label}</div>
