@@ -2,6 +2,7 @@ import { useTaskStore } from '../store/taskStore'
 import TaskList from './TaskList'
 import TaskSteps from './TaskSteps'
 import ModelConfig from './ModelConfig'
+import UploadZone from './UploadZone'
 
 interface MainContentProps {
   activeMenu: 'home' | 'upload' | 'model' | 'settings'
@@ -43,21 +44,27 @@ export default function MainContent({ activeMenu }: MainContentProps) {
           </div>
         </aside>
 
-        {/* 右侧：步骤区域 */}
-        <main className="flex-1 overflow-hidden bg-gray-50">
-          {currentTaskId ? (
-            <TaskSteps taskId={currentTaskId} />
-          ) : (
-            <div className="h-full flex items-center justify-center p-8">
-              <div className="text-center max-w-md">
-                <div className="text-gray-400 text-6xl mb-4">📝</div>
-                <h2 className="text-xl font-semibold text-gray-700 mb-2">选择一个任务查看详情</h2>
-                <p className="text-sm text-gray-500">
-                  在左侧任务列表中点击任务来查看处理步骤
-                </p>
+        {/* 右侧：上传 + 步骤区域 */}
+        <main className="flex-1 flex flex-col overflow-hidden bg-gray-50">
+          {/* 顶部上传区域 */}
+          <div className="p-6 pb-0 shrink-0">
+            <UploadZone
+              onUploadSuccess={(taskId) => {
+                // 自动选中新任务
+                useTaskStore.getState().setCurrentTask(taskId)
+              }}
+            />
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-6">
+            {currentTaskId ? (
+              <TaskSteps taskId={currentTaskId} />
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center text-gray-400">
+                <p>请选择一个任务查看详情，或上传新文件</p>
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </main>
       </div>
     </div>

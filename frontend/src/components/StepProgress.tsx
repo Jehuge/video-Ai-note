@@ -43,7 +43,7 @@ export default function StepProgress({ steps, currentStep }: StepProgressProps) 
   }
 
   return (
-    <div className="space-y-4">
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
       {steps.map((step, index) => {
         const isCurrent = currentStep === index
         const isActive = step.status === 'processing' || isCurrent

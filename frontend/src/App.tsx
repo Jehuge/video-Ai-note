@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import Sidebar from './components/Sidebar'
+// Sidebar component removed - navigation moved to header
 import MainContent from './components/MainContent'
 import CurrentModelDisplay from './components/CurrentModelDisplay'
 import { Toaster } from 'react-hot-toast'
+import { Home, Bot, Settings } from 'lucide-react'
 
 type MenuItem = 'home' | 'upload' | 'model' | 'settings'
 
@@ -19,11 +20,46 @@ function App() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
           </div>
-          <div>
+          <div className="mr-8">
             <h1 className="text-lg font-bold text-gray-900">Video AI Note</h1>
             <p className="text-xs text-gray-500">智能视频笔记生成工具</p>
           </div>
+
+          {/* 中间：导航菜单 */}
+          <nav className="flex items-center gap-1 bg-gray-100/50 p-1 rounded-lg">
+            <button
+              onClick={() => setActiveMenu('home')}
+              className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeMenu === 'home'
+                  ? 'bg-white text-blue-600 shadow-sm'
+                  : 'text-gray-600 hover:bg-gray-200/50 hover:text-gray-900'
+                }`}
+            >
+              <Home className="w-4 h-4" />
+              任务
+            </button>
+            <button
+              onClick={() => setActiveMenu('model')}
+              className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeMenu === 'model'
+                  ? 'bg-white text-blue-600 shadow-sm'
+                  : 'text-gray-600 hover:bg-gray-200/50 hover:text-gray-900'
+                }`}
+            >
+              <Bot className="w-4 h-4" />
+              模型配置
+            </button>
+            <button
+              onClick={() => setActiveMenu('settings')}
+              className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeMenu === 'settings'
+                  ? 'bg-white text-blue-600 shadow-sm'
+                  : 'text-gray-600 hover:bg-gray-200/50 hover:text-gray-900'
+                }`}
+            >
+              <Settings className="w-4 h-4" />
+              设置
+            </button>
+          </nav>
         </div>
+
         {/* 右侧：当前模型显示 */}
         <div className="flex items-center">
           <CurrentModelDisplay />
@@ -32,9 +68,6 @@ function App() {
 
       {/* 主内容区 */}
       <div className="flex-1 flex overflow-hidden">
-        {/* 左侧：菜单栏 */}
-        <Sidebar activeMenu={activeMenu} onMenuChange={setActiveMenu} />
-
         {/* 右侧：功能配置和操作区 */}
         <main className="flex-1 overflow-hidden bg-gray-50">
           <MainContent activeMenu={activeMenu} />

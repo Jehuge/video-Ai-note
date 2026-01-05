@@ -1,15 +1,14 @@
 import { useEffect, useState, useRef } from 'react'
-import { CheckCircle2, XCircle, Loader2, Clock, Trash2 } from 'lucide-react'
+import { Plus, UploadCloud, FileVideo, Calendar, Trash2, Loader2, CheckCircle2, AlertCircle, Clock, XCircle } from 'lucide-react'
 import { useTaskStore } from '../store/taskStore'
 import { getTasks, deleteTask, uploadVideo } from '../services/api'
 import toast from 'react-hot-toast'
 import FileConfirmDialog from './FileConfirmDialog'
-import { Plus } from 'lucide-react'
 
 const statusIcons = {
   completed: <CheckCircle2 className="w-4 h-4 text-green-500" />,
-  failed: <XCircle className="w-4 h-4 text-red-500" />,
-  pending: <Clock className="w-4 h-4 text-gray-400" />,
+  failed: <AlertCircle className="w-4 h-4 text-red-500" />,
+  pending: <Clock className="w-4 h-4 text-amber-500" />,
   processing: <Loader2 className="w-4 h-4 animate-spin text-blue-500" />,
   transcribing: <Loader2 className="w-4 h-4 animate-spin text-blue-500" />,
   summarizing: <Loader2 className="w-4 h-4 animate-spin text-blue-500" />,
@@ -34,6 +33,7 @@ export default function TaskList() {
   const [uploadProgress, setUploadProgress] = useState(0)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [showConfirm, setShowConfirm] = useState(false)
+  const [isDragOver, setIsDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // 加载任务列表
@@ -104,10 +104,7 @@ export default function TaskList() {
   }
 
   // 处理文件选择
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-
+  const handleFile = (file: File) => {
     // 检查文件类型（基于扩展名和 MIME 类型）
     const fileExtension = file.name.split('.').pop()?.toLowerCase()
     const allowedExtensions = ['mp4', 'avi', 'mov', 'mkv', 'webm', 'mp3', 'wav', 'm4a', 'flv', 'wmv']
@@ -117,21 +114,46 @@ export default function TaskList() {
 
     if (!isAllowedExtension && !isAllowedMime) {
       toast.error('不支持的文件类型，请上传视频或音频文件')
-      e.target.value = ''
       return
     }
 
     // 检查文件大小（限制 500MB）
     if (file.size > 500 * 1024 * 1024) {
       toast.error('文件大小不能超过 500MB')
-      e.target.value = ''
       return
     }
 
     // 显示确认对话框
     setSelectedFile(file)
     setShowConfirm(true)
+  }
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      handleFile(file)
+    }
     e.target.value = ''
+  }
+
+  // 拖拽处理
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragOver(true)
+  }
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragOver(false)
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragOver(false)
+    const file = e.dataTransfer.files[0]
+    if (file) {
+      handleFile(file)
+    }
   }
 
   // 确认上传
@@ -226,76 +248,147 @@ export default function TaskList() {
   }
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="p-4 border-b border-gray-200 flex items-center justify-between shrink-0">
-        <h2 className="text-base font-semibold text-gray-900">任务列表</h2>
-        <button
+    <div className="flex flex-col h-full bg-gray-50/50">
+      <div className="p-4 shrink-0">
+        <h2 className="text-lg font-bold text-gray-900 mb-4 px-1">我的任务</h2>
+
+        {/* 拖拽上传区域 */}
+        <div
           onClick={triggerFileUpload}
-          disabled={uploading}
-          className="p-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          title="新建任务"
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          className={`
+            relative group cursor-pointer overflow-hidden rounded-xl border-2 border-dashed transition-all duration-300
+            ${isDragOver
+              ? 'border-blue-500 bg-blue-50 scale-[1.02]'
+              : 'border-blue-200 bg-white hover:border-blue-400 hover:bg-blue-50/50 hover:shadow-md'
+            }
+            ${uploading ? 'pointer-events-none opacity-80' : ''}
+          `}
         >
-          {uploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Plus className="w-5 h-5" />}
-        </button>
-        <input
-          type="file"
-          ref={fileInputRef}
-          className="hidden"
-          onChange={handleFileSelect}
-          disabled={uploading}
-        />
+          <div className="p-6 flex flex-col items-center justify-center text-center">
+            <div className={`
+              p-3 rounded-full mb-3 transition-colors duration-300
+              ${isDragOver ? 'bg-blue-100' : 'bg-blue-50 group-hover:bg-blue-100'}
+            `}>
+              {uploading ? (
+                <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
+              ) : (
+                <UploadCloud className="w-6 h-6 text-blue-600" />
+              )}
+            </div>
+
+            {uploading ? (
+              <div className="w-full max-w-[140px]">
+                <div className="text-sm font-medium text-blue-900 mb-1">正在上传...</div>
+                <div className="text-xs text-blue-600 mb-2">{uploadProgress}%</div>
+                <div className="h-1 bg-blue-100 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-blue-500 transition-all duration-300"
+                    style={{ width: `${uploadProgress}%` }}
+                  />
+                </div>
+              </div>
+            ) : (
+              <>
+                <h3 className="text-sm font-semibold text-gray-900 mb-1">
+                  {isDragOver ? '释放文件以开始' : '点击或拖拽上传'}
+                </h3>
+                <p className="text-xs text-gray-500 px-2 leading-relaxed">
+                  支持视频与音频文件<br />自动生成 AI 笔记
+                </p>
+              </>
+            )}
+          </div>
+
+          <input
+            type="file"
+            ref={fileInputRef}
+            className="hidden"
+            onChange={handleFileSelect}
+            disabled={uploading}
+          />
+        </div>
       </div>
 
-      {uploading && (
-        <div className="p-4 border-b border-gray-100 bg-blue-50">
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-xs font-medium text-blue-700">正在上传...</span>
-            <span className="text-xs text-blue-700">{uploadProgress}%</span>
-          </div>
-          <div className="w-full bg-blue-200 rounded-full h-1.5">
-            <div
-              className="bg-blue-600 h-1.5 rounded-full transition-all duration-300"
-              style={{ width: `${uploadProgress}%` }}
-            ></div>
-          </div>
-        </div>
-      )}
-
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="flex-1 overflow-y-auto px-4 pb-4">
         {tasks.length === 0 ? (
-          <div className="text-center py-12">
-            <p className="text-gray-400 text-sm">暂无任务</p>
-            <p className="text-xs text-gray-400 mt-2">点击顶部 "+" 号上传文件</p>
+          <div className="flex flex-col items-center justify-center h-48 text-center border-2 border-dashed border-gray-100 rounded-xl bg-white/50">
+            <div className="p-3 bg-gray-50 rounded-full mb-3">
+              <FileVideo className="w-6 h-6 text-gray-300" />
+            </div>
+            <p className="text-sm font-medium text-gray-500">暂无任务</p>
+            <p className="text-xs text-gray-400 mt-1">上传文件开始体验</p>
           </div>
         ) : (
-          <div className="space-y-2">
+          <div className="space-y-3">
             {tasks.map((task) => (
               <div
                 key={task.id}
-                className={`p-3 rounded-lg transition-all cursor-pointer border ${currentTaskId === task.id
-                    ? 'bg-blue-50 border-blue-500 shadow-sm'
-                    : 'bg-white border-gray-200 hover:border-gray-300 hover:shadow-sm'
-                  }`}
+                className={`
+                group relative p-4 rounded-xl transition-all duration-200 cursor-pointer border
+                ${currentTaskId === task.id
+                    ? 'bg-white border-blue-500 shadow-md ring-1 ring-blue-100'
+                    : 'bg-white border-gray-100 hover:border-blue-200 hover:shadow-md'
+                  }
+              `}
                 onClick={() => {
                   setCurrentTask(task.id)
                 }}
               >
-                <div className="flex items-start justify-between gap-2">
+                <div className="flex items-start justify-between gap-3">
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-900 truncate mb-1.5">
-                      {task.filename}
-                    </p>
-                    <div className="flex items-center gap-2">
-                      {statusIcons[task.status]}
-                      <span className="text-xs text-gray-500">
-                        {statusText[task.status]}
-                      </span>
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className={`
+                      p-1.5 rounded-lg shrink-0
+                      ${currentTaskId === task.id ? 'bg-blue-50 text-blue-600' : 'bg-gray-50 text-gray-500 group-hover:bg-blue-50 group-hover:text-blue-500'}
+                    `}>
+                        <FileVideo className="w-4 h-4" />
+                      </div>
+                      <h3 className={`text-sm font-semibold truncate transition-colors ${currentTaskId === task.id ? 'text-blue-700' : 'text-gray-900 group-hover:text-blue-700'
+                        }`}
+                        title={task.filename}
+                      >
+                        {task.filename}
+                      </h3>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <div className={`
+                      inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-medium border
+                      ${task.status === 'completed' ? 'bg-green-50 text-green-700 border-green-100' :
+                          task.status === 'failed' ? 'bg-red-50 text-red-700 border-red-100' :
+                            'bg-blue-50 text-blue-700 border-blue-100'}
+                    `}>
+                        {statusIcons[task.status]}
+                        <span>{
+                          task.status === 'completed' ? '已完成' :
+                            task.status === 'failed' ? '处理失败' :
+                              task.status === 'pending' ? '等待处理' :
+                                task.status === 'processing' ? '处理中...' :
+                                  task.status === 'transcribing' ? '转写中...' :
+                                    task.status === 'summarizing' ? '生成中...' : task.status
+                        }</span>
+                      </div>
+
+                      {task.createdAt && (
+                        <div className="flex items-center gap-1 text-xs text-gray-400">
+                          <Calendar className="w-3 h-3" />
+                          <span>{new Date(task.createdAt).toLocaleDateString()}</span>
+                        </div>
+                      )}
                     </div>
                   </div>
+
                   <button
                     onClick={(e) => handleDelete(task.id, e)}
                     disabled={deletingIds.has(task.id)}
-                    className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="
+                    opacity-0 group-hover:opacity-100 transition-all
+                    p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg
+                    disabled:opacity-0
+                  "
                     title="删除任务"
                   >
                     {deletingIds.has(task.id) ? (
