@@ -1,4 +1,5 @@
-import React from 'react'
+
+
 
 interface ProviderIconProps {
   provider: string
@@ -17,8 +18,15 @@ const ICON_FILENAMES: Record<string, string> = {
   deepseek_color: 'deepseek-color.svg',
 }
 
-export default function ProviderIcon({ provider, className, alt }: ProviderIconProps) {
-  const filename = ICON_FILENAMES[provider]
+export default function ProviderIcon({ provider, className, alt }: ProviderIconProps & { providerType?: string }) {
+  // 优先使用 providerType，如果未提供或未找到图标，则尝试使用 provider
+  // 处理一些别名映射
+  let type = (arguments[0].providerType || provider).toLowerCase()
+  if (type === 'qwen') type = 'chatglm' // 暂时用 chatglm 图标或者如果有 qwen 图标
+  if (type === 'siliconflow') type = 'siliconcloud'
+
+  const filename = ICON_FILENAMES[type] || ICON_FILENAMES[provider.toLowerCase()]
+
   if (filename) {
     // file is located at frontend/icon/*.svg, this file is in frontend/src/components
     const src = new URL(`../../icon/${filename}`, import.meta.url).href
@@ -26,7 +34,7 @@ export default function ProviderIcon({ provider, className, alt }: ProviderIconP
   }
 
   // fallback emoji
-  return <span className={className}>🤖</span>
+  return <span className={`flex items-center justify-center bg-gray-100 rounded text-lg ${className}`}>🤖</span>
 }
 
 

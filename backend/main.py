@@ -17,6 +17,12 @@ from app.transcriber.transcriber_provider import get_transcriber
 logger = get_logger(__name__)
 load_dotenv()
 
+# 清除代理设置，避免 httpx 使用系统代理导致连接失败
+for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']:
+    if proxy_var in os.environ:
+        del os.environ[proxy_var]
+logger.info("已清除代理环境变量")
+
 # 创建必要的目录
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
 NOTE_OUTPUT_DIR = os.getenv("NOTE_OUTPUT_DIR", "note_results")

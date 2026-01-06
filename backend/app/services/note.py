@@ -39,15 +39,21 @@ class NoteGenerator:
         if self.gpt is None:
             if self.model_config:
                 # 使用提供的模型配置
+                # 使用提供的模型配置
                 provider = self.model_config.get('provider', 'openai')
+                provider_type = self.model_config.get('provider_type', 'openai') 
+                # 兼容旧配置：如果 provider 是 ollama，则 type 也是 ollama
+                if provider == 'ollama':
+                    provider_type = 'ollama'
+                    
                 api_key = self.model_config.get('api_key', '')
                 base_url = self.model_config.get('base_url', '')
                 model = self.model_config.get('model', '')
                 
-                logger.info(f"使用模型配置: provider={provider}, model={model}, base_url={base_url}")
+                logger.info(f"使用模型配置: provider={provider}, type={provider_type}, model={model}, base_url={base_url}")
                 
-                # 根据提供商创建对应的 GPT 实例
-                if provider == 'ollama':
+                # 根据提供商类型创建对应的 GPT 实例
+                if provider_type == 'ollama':
                     # Ollama 使用 OpenAI 兼容接口
                     # 确保 base_url 正确
                     if not base_url or base_url.strip() == '':
@@ -64,7 +70,7 @@ class NoteGenerator:
                     )
                 else:
                     # 其他提供商使用 OpenAI 兼容接口
-                    logger.info(f"初始化 {provider} GPT: model={model}")
+                    logger.info(f"初始化 {provider} ({provider_type}) GPT: model={model}")
                     self.gpt = OpenAIGPT(
                         api_key=api_key,
                         base_url=base_url,

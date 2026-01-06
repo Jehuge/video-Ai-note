@@ -109,6 +109,7 @@ export const regenerateNote = async (taskId: string, noteStyle?: string) => {
 // 获取模型列表
 export const getModelList = async (config: {
   provider: string
+  provider_type?: string
   api_key: string
   base_url?: string
 }) => {
@@ -118,6 +119,7 @@ export const getModelList = async (config: {
 // 测试模型连接
 export const testModelConnection = async (config: {
   provider: string
+  provider_type?: string
   api_key: string
   base_url?: string
 }) => {
