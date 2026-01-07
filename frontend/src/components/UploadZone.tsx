@@ -1,9 +1,10 @@
 import { useState, useRef } from 'react'
-import { UploadCloud, Loader2 } from 'lucide-react'
+import { UploadCloud, Loader2, Database, Upload as UploadIcon } from 'lucide-react'
 import { useTaskStore } from '../store/taskStore'
 import { uploadVideo } from '../services/api'
 import toast from 'react-hot-toast'
 import FileConfirmDialog from './FileConfirmDialog'
+import VideoLibrary from './VideoLibrary'
 
 interface UploadZoneProps {
     onUploadSuccess?: (taskId: string) => void
@@ -11,6 +12,7 @@ interface UploadZoneProps {
 
 export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
     const { addTask } = useTaskStore()
+    const [mode, setMode] = useState<'upload' | 'library'>('upload')
 
     const [uploading, setUploading] = useState(false)
     const [uploadProgress, setUploadProgress] = useState(0)
@@ -19,6 +21,9 @@ export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
     const [isDragOver, setIsDragOver] = useState(false)
     const fileInputRef = useRef<HTMLInputElement>(null)
 
+    // ... handleFile and other existing functions ...
+
+    // IMPORTANT: Copy existing handleFile, handleFileSelect, handleDragOver, handleDragLeave, handleDrop, handleConfirmUpload, triggerFileUpload logic here
     const handleFile = (file: File) => {
         // 检查文件类型
         const fileExtension = file.name.split('.').pop()?.toLowerCase()
@@ -141,85 +146,115 @@ export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
     }
 
     return (
-        <>
-            <div
-                onClick={triggerFileUpload}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDrop={handleDrop}
-                className={`
-          relative group cursor-pointer overflow-hidden rounded-2xl border-2 border-dashed transition-all duration-300 ease-out
-          ${isDragOver
-                        ? 'border-blue-500 bg-blue-50/50 scale-[1.01] shadow-xl ring-4 ring-blue-500/10'
-                        : 'border-slate-200 bg-white hover:border-blue-400 hover:bg-slate-50 hover:shadow-lg hover:-translate-y-0.5'
-                    }
-          ${uploading ? 'pointer-events-none opacity-80' : ''}
-        `}
-            >
-                <div className="p-5 flex items-center gap-5">
-                    <div className={`
-            flex-shrink-0 w-12 h-12 rounded-full flex items-center justify-center transition-all duration-300 transform group-hover:scale-110
-            ${isDragOver ? 'bg-blue-100 rotate-12' : 'bg-slate-50 group-hover:bg-blue-50 text-slate-400 group-hover:text-blue-500'}
-          `}>
-                        {uploading ? (
-                            <Loader2 className="w-6 h-6 animate-spin" />
-                        ) : (
-                            <UploadCloud className="w-6 h-6" />
-                        )}
-                    </div>
-
-                    <div className="flex-1 min-w-0 text-left">
-                        {uploading ? (
-                            <div className="w-full pr-4">
-                                <div className="flex items-center justify-between mb-1.5">
-                                    <div className="text-sm font-semibold text-slate-900">正在上传... {uploadProgress}%</div>
-                                </div>
-                                <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden w-full max-w-md ring-1 ring-slate-900/5">
-                                    <div
-                                        className="h-full bg-blue-500 transition-all duration-300 ease-out rounded-full"
-                                        style={{ width: `${uploadProgress}%` }}
-                                    />
-                                </div>
-                            </div>
-                        ) : (
-                            <div>
-                                <h3 className="text-base font-bold text-slate-900 group-hover:text-blue-600 transition-colors">
-                                    {isDragOver ? '释放文件以开始' : '点击或拖拽上传视频'}
-                                </h3>
-                                <p className="text-xs text-slate-500 mt-0.5">
-                                    支持 MP4, AVI, MP3 等 • 最大 500MB
-                                </p>
-                            </div>
-                        )}
-                    </div>
-
-                    {!uploading && (
-                        <div className="hidden sm:block">
-                            <span className="px-3 py-1.5 rounded-lg bg-slate-50 text-xs font-medium text-slate-600 border border-slate-200 group-hover:border-blue-200 group-hover:text-blue-600 transition-colors">
-                                选择文件
-                            </span>
-                        </div>
-                    )}
-                </div>
-
-                <input
-                    type="file"
-                    ref={fileInputRef}
-                    className="hidden"
-                    onChange={handleFileSelect}
-                    disabled={uploading}
-                />
+        <div className="flex flex-col gap-4">
+            {/* Mode Switcher */}
+            <div className="flex bg-gray-100 p-1 rounded-lg self-start">
+                <button
+                    onClick={() => setMode('upload')}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${mode === 'upload'
+                        ? 'bg-white text-blue-600 shadow-sm'
+                        : 'text-gray-600 hover:text-gray-900'
+                        }`}
+                >
+                    <UploadIcon className="w-4 h-4" />
+                    上传文件
+                </button>
+                <button
+                    onClick={() => setMode('library')}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${mode === 'library'
+                        ? 'bg-white text-blue-600 shadow-sm'
+                        : 'text-gray-600 hover:text-gray-900'
+                        }`}
+                >
+                    <Database className="w-4 h-4" />
+                    从媒体库选择
+                </button>
             </div>
 
-            <FileConfirmDialog
-                file={selectedFile}
-                open={showConfirm}
-                onConfirm={handleConfirmUpload}
-                onCancel={() => {
-                    setShowConfirm(false)
-                    setSelectedFile(null)
-                }}
-            />
-        </>
+            {mode === 'upload' ? (
+                <>
+                    <div
+                        onClick={triggerFileUpload}
+                        onDragOver={handleDragOver}
+                        onDragLeave={handleDragLeave}
+                        onDrop={handleDrop}
+                        className={`
+                        relative group cursor-pointer overflow-hidden rounded-2xl border-2 border-dashed transition-all duration-300 ease-out
+                        ${isDragOver
+                                ? 'border-blue-500 bg-blue-50/50 scale-[1.01] shadow-xl ring-4 ring-blue-500/10'
+                                : 'border-slate-200 bg-white hover:border-blue-400 hover:bg-slate-50 hover:shadow-lg hover:-translate-y-0.5'
+                            }
+                        ${uploading ? 'pointer-events-none opacity-80' : ''}
+                        `}
+                    >
+                        <div className="p-5 flex items-center gap-5">
+                            <div className={`
+                                flex-shrink-0 w-12 h-12 rounded-full flex items-center justify-center transition-all duration-300 transform group-hover:scale-110
+                                ${isDragOver ? 'bg-blue-100 rotate-12' : 'bg-slate-50 group-hover:bg-blue-50 text-slate-400 group-hover:text-blue-500'}
+                            `}>
+                                {uploading ? (
+                                    <Loader2 className="w-6 h-6 animate-spin" />
+                                ) : (
+                                    <UploadCloud className="w-6 h-6" />
+                                )}
+                            </div>
+
+                            <div className="flex-1 min-w-0 text-left">
+                                {uploading ? (
+                                    <div className="w-full pr-4">
+                                        <div className="flex items-center justify-between mb-1.5">
+                                            <div className="text-sm font-semibold text-slate-900">正在上传... {uploadProgress}%</div>
+                                        </div>
+                                        <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden w-full max-w-md ring-1 ring-slate-900/5">
+                                            <div
+                                                className="h-full bg-blue-500 transition-all duration-300 ease-out rounded-full"
+                                                style={{ width: `${uploadProgress}%` }}
+                                            />
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div>
+                                        <h3 className="text-base font-bold text-slate-900 group-hover:text-blue-600 transition-colors">
+                                            {isDragOver ? '释放文件以开始' : '点击或拖拽上传视频'}
+                                        </h3>
+                                        <p className="text-xs text-slate-500 mt-0.5">
+                                            支持 MP4, AVI, MP3 等 • 最大 500MB
+                                        </p>
+                                    </div>
+                                )}
+                            </div>
+
+                            {!uploading && (
+                                <div className="hidden sm:block">
+                                    <span className="px-3 py-1.5 rounded-lg bg-slate-50 text-xs font-medium text-slate-600 border border-slate-200 group-hover:border-blue-200 group-hover:text-blue-600 transition-colors">
+                                        选择文件
+                                    </span>
+                                </div>
+                            )}
+                        </div>
+
+                        <input
+                            type="file"
+                            ref={fileInputRef}
+                            className="hidden"
+                            onChange={handleFileSelect}
+                            disabled={uploading}
+                        />
+                    </div>
+
+                    <FileConfirmDialog
+                        file={selectedFile}
+                        open={showConfirm}
+                        onConfirm={handleConfirmUpload}
+                        onCancel={() => {
+                            setShowConfirm(false)
+                            setSelectedFile(null)
+                        }}
+                    />
+                </>
+            ) : (
+                <VideoLibrary onTaskCreated={onUploadSuccess || (() => { })} />
+            )}
+        </div>
     )
 }

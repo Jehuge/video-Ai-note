@@ -17,4 +17,7 @@ def create_app(lifespan=None) -> FastAPI:
     app.include_router(model.router, prefix="/api", tags=["model"])
     app.include_router(bili_download.router, prefix="/api", tags=["bili"])
     
+    from app.routers import files
+    app.include_router(files.router, prefix="/api", tags=["files"])
+    
     return app

@@ -1,11 +1,20 @@
 import { X, FileVideo, CheckCircle2 } from 'lucide-react'
 import { useState } from 'react'
 
+export interface FileLike {
+  name: string
+  size: number
+  type: string
+  lastModified: number
+}
+
 interface FileConfirmDialogProps {
-  file: File | null
+  file: File | FileLike | null
   open: boolean
   onConfirm: (screenshot: boolean) => void
   onCancel: () => void
+  title?: string
+  confirmText?: string
 }
 
 export default function FileConfirmDialog({
@@ -13,6 +22,8 @@ export default function FileConfirmDialog({
   open,
   onConfirm,
   onCancel,
+  title = "确认上传文件",
+  confirmText = "确认上传"
 }: FileConfirmDialogProps) {
   const [enableScreenshot, setEnableScreenshot] = useState(true)
 
@@ -29,7 +40,7 @@ export default function FileConfirmDialog({
       <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
         <div className="p-6">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-xl font-semibold">确认上传文件</h3>
+            <h3 className="text-xl font-semibold">{title}</h3>
             <button
               onClick={onCancel}
               className="text-gray-400 hover:text-gray-600 transition-colors"
@@ -87,7 +98,7 @@ export default function FileConfirmDialog({
                 className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
               >
                 <CheckCircle2 className="w-4 h-4" />
-                确认上传
+                {confirmText}
               </button>
             </div>
           </div>
@@ -96,4 +107,3 @@ export default function FileConfirmDialog({
     </div>
   )
 }
-

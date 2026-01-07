@@ -144,3 +144,33 @@ export const exportPDF = async (taskId: string) => {
   return response
 }
 
+// 获取可用视频文件列表
+export const getVideoFiles = async () => {
+  return await api.get('/files/videos')
+}
+
+// 从现有文件创建任务
+export const createTaskFromFile = async (
+  filePath: string,
+  screenshot: boolean = false,
+  modelConfig: {
+    provider: string
+    api_key: string
+    base_url?: string
+    model: string
+  } | null = null,
+  noteStyle: string = 'simple'
+) => {
+  const formData = new FormData()
+  // 与 uploadVideo 保持一致，但只传 existing_file_path 而不是 file
+  formData.append('existing_file_path', filePath)
+  formData.append('screenshot', screenshot.toString())
+  formData.append('note_style', noteStyle)
+
+  if (modelConfig) {
+    formData.append('model_config', JSON.stringify(modelConfig))
+  }
+
+  return await api.post('/upload', formData)
+}
+

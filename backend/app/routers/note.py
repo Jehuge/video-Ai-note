@@ -108,9 +108,10 @@ def run_note_task_step(task_id: str, video_path: str, filename: str, step: str, 
 @router.post("/upload")
 async def upload_video(
     request: Request,
-    file: UploadFile = File(...),
+    file: Optional[UploadFile] = File(None),
     screenshot: str = Form("false"),
     note_style: str = Form("simple"),
+    existing_file_path: Optional[str] = Form(None),
     background_tasks: BackgroundTasks = BackgroundTasks()
 ):
     """上传视频文件并开始生成笔记"""
@@ -136,8 +137,25 @@ async def upload_video(
             model_config_dict = {}
         model_config_dict["note_style"] = note_style
         
+        # 检查参数
+        if not file and not existing_file_path:
+            return R.error("请上传文件或选择已有文件")
+            
+        # 确定文件名和源路径
+        source_path = None
+        filename = ""
+        
+        if existing_file_path:
+            # 验证已有文件
+            source_path = Path(existing_file_path)
+            if not source_path.exists():
+                return R.error("选择的文件不存在")
+            filename = source_path.name
+        else:
+            filename = file.filename
+
         # 检查文件扩展名
-        file_ext = Path(file.filename).suffix.lower()
+        file_ext = Path(filename).suffix.lower()
         if file_ext not in ALLOWED_EXTENSIONS:
             return R.error(f"不支持的文件类型: {file_ext}，支持的类型: {', '.join(ALLOWED_EXTENSIONS)}")
         
@@ -145,14 +163,23 @@ async def upload_video(
         task_id = str(uuid.uuid4())
         
         # 保存文件
-        file_path = UPLOAD_DIR / f"{task_id}{file_ext}"
-        with open(file_path, "wb") as f:
-            content = await file.read()
-            f.write(content)
+        target_path = UPLOAD_DIR / f"{task_id}{file_ext}"
+        
+        if existing_file_path:
+            # 如果是已有文件，直接复制或创建软链接
+            # 这里为了简单和安全，我们复制文件
+            import shutil
+            shutil.copy2(source_path, target_path)
+            logger.info(f"已复制文件: {source_path} -> {target_path}")
+        else:
+            # 上传文件
+            with open(target_path, "wb") as f:
+                content = await file.read()
+                f.write(content)
         
         # 创建任务记录（状态为 pending，等待用户确认第一步）
         # 将模型配置保存到任务记录中（如果数据库支持）
-        create_task(task_id=task_id, filename=file.filename, screenshot=enable_screenshot)
+        create_task(task_id=task_id, filename=filename, screenshot=enable_screenshot)
         
         # 将模型配置保存到文件系统，供后续步骤使用
         if model_config_dict:
@@ -164,11 +191,11 @@ async def upload_video(
         
         # 不自动启动，等待用户确认第一步
         
-        logger.info(f"文件上传成功: {file.filename}, task_id={task_id}")
+        logger.info(f"任务创建成功: {filename}, task_id={task_id}")
         
         return R.success({
             "task_id": task_id,
-            "filename": file.filename
+            "filename": filename
         })
         
     except Exception as e:
