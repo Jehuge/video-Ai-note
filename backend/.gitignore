@@ -35,3 +35,6 @@ ffmpeg_bin/
 *.log
 
 bilibili_user_data/
+
+# macOS
+.DS_Store
