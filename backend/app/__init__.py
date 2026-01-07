@@ -1,9 +1,7 @@
 from fastapi import FastAPI
 
-from .routers import note, model
 
-
-def create_app(lifespan) -> FastAPI:
+def create_app(lifespan=None) -> FastAPI:
     """创建 FastAPI 应用"""
     app = FastAPI(
         title="Video AI Note",
@@ -12,8 +10,11 @@ def create_app(lifespan) -> FastAPI:
         lifespan=lifespan
     )
     
-    app.include_router(note.router, prefix="/api")
-    app.include_router(model.router, prefix="/api")
+    # 注册路由
+    from app.routers import note, model, bili_download
+    
+    app.include_router(note.router, prefix="/api", tags=["note"])
+    app.include_router(model.router, prefix="/api", tags=["model"])
+    app.include_router(bili_download.router, prefix="/api", tags=["bili"])
     
     return app
-

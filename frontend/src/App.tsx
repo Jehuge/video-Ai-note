@@ -3,9 +3,9 @@ import { useState } from 'react'
 import MainContent from './components/MainContent'
 import CurrentModelDisplay from './components/CurrentModelDisplay'
 import { Toaster } from 'react-hot-toast'
-import { Home, Bot, Settings } from 'lucide-react'
+import { Home, Bot, Settings, Download } from 'lucide-react'
 
-type MenuItem = 'home' | 'upload' | 'model' | 'settings'
+type MenuItem = 'home' | 'upload' | 'model' | 'settings' | 'bili'
 
 function App() {
   const [activeMenu, setActiveMenu] = useState<MenuItem>('home')
@@ -30,8 +30,8 @@ function App() {
             <button
               onClick={() => setActiveMenu('home')}
               className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeMenu === 'home'
-                  ? 'bg-white text-blue-600 shadow-sm'
-                  : 'text-gray-600 hover:bg-gray-200/50 hover:text-gray-900'
+                ? 'bg-white text-blue-600 shadow-sm'
+                : 'text-gray-600 hover:bg-gray-200/50 hover:text-gray-900'
                 }`}
             >
               <Home className="w-4 h-4" />
@@ -40,12 +40,22 @@ function App() {
             <button
               onClick={() => setActiveMenu('model')}
               className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeMenu === 'model'
-                  ? 'bg-white text-blue-600 shadow-sm'
-                  : 'text-gray-600 hover:bg-gray-200/50 hover:text-gray-900'
+                ? 'bg-white text-blue-600 shadow-sm'
+                : 'text-gray-600 hover:bg-gray-200/50 hover:text-gray-900'
                 }`}
             >
               <Bot className="w-4 h-4" />
               模型配置
+            </button>
+            <button
+              onClick={() => setActiveMenu('bili')}
+              className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeMenu === 'bili'
+                  ? 'bg-white text-blue-600 shadow-sm'
+                  : 'text-gray-600 hover:bg-gray-200/50 hover:text-gray-900'
+                }`}
+            >
+              <Download className="w-4 h-4" />
+              B站下载
             </button>
             <button
               onClick={() => setActiveMenu('settings')}

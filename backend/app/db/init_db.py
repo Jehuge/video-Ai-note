@@ -1,5 +1,6 @@
 from app.db.engine import Base, engine
 from app.db.migrate import migrate_add_screenshot_column
+from app.db.bili_dao import set_default_bili_config
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -14,8 +15,12 @@ def init_db():
         # 执行迁移
         migrate_add_screenshot_column()
         
+        # 设置 B站下载默认配置
+        set_default_bili_config()
+        
         logger.info("数据库初始化完成")
     except Exception as e:
         logger.error(f"数据库初始化失败: {e}")
         raise
+
 

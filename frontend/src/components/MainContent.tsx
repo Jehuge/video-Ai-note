@@ -3,9 +3,10 @@ import TaskList from './TaskList'
 import TaskSteps from './TaskSteps'
 import ModelConfig from './ModelConfig'
 import UploadZone from './UploadZone'
+import BiliDownload from '../pages/BiliDownload'
 
 interface MainContentProps {
-  activeMenu: 'home' | 'upload' | 'model' | 'settings'
+  activeMenu: 'home' | 'upload' | 'model' | 'settings' | 'bili'
 }
 
 export default function MainContent({ activeMenu }: MainContentProps) {
@@ -14,6 +15,10 @@ export default function MainContent({ activeMenu }: MainContentProps) {
 
   if (activeMenu === 'model') {
     return <ModelConfig />
+  }
+
+  if (activeMenu === 'bili') {
+    return <BiliDownload />
   }
 
 

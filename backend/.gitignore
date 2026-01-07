@@ -34,3 +34,4 @@ ffmpeg_bin/
 # Logs
 *.log
 
+bilibili_user_data/
