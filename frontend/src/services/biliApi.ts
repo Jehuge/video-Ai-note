@@ -38,7 +38,7 @@ export interface BiliVideo {
 }
 
 export const getBiliVideos = async (): Promise<BiliVideo[]> => {
-    const response = await api.get('/bili/videos')
+    const response = await api.get(`/bili/videos?_t=${Date.now()}`)
     return response.data.data || []
 }
 
@@ -81,7 +81,7 @@ export const stopDownload = async () => {
 }
 
 export const getDownloadStatus = async (): Promise<DownloadStatus> => {
-    const response = await api.get('/bili/download/status')
+    const response = await api.get(`/bili/download/status?_t=${Date.now()}`)
     return response.data.data
 }
 
@@ -98,7 +98,7 @@ export interface BiliDownloadHistory {
 }
 
 export const getBiliHistory = async (limit: number = 50): Promise<BiliDownloadHistory[]> => {
-    const response = await api.get(`/bili/history?limit=${limit}`)
+    const response = await api.get(`/bili/history?limit=${limit}&_t=${Date.now()}`)
     return response.data.data || []
 }
 
