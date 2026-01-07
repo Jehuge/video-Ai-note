@@ -1,205 +1,216 @@
-# Video AI Note
+# 🎬 Video Note AI
 
-一个智能视频笔记生成工具，支持自动提取视频音频、转写文字，并使用 AI 生成结构化笔记。
+一款强大的AI视频笔记应用，支持视频转录、智能笔记生成和B站视频批量下载。
 
-**完全本地化处理，保护数据隐私** - 所有数据处理均在本地完成，支持 Ollama 等本地大模型，无需联网即可使用。
-![alt text](image.png)
-## 功能特性
+## ✨ 主要功能
 
-- **完全本地化处理** - 所有数据在本地处理，不上传到云端，保护隐私安全
-- **支持本地大模型** - 支持 Ollama 4B 等本地模型，完全离线运行，无需 API 密钥
-- 直接上传视频文件（支持常见视频格式）
-- 自动音频转文字（使用 fast-whisper，本地运行）
-- AI 生成结构化笔记（支持 OpenAI/DeepSeek/Qwen/Ollama 等）
-- Markdown 格式输出（图片自动嵌入为 base64）
-- PDF 导出（支持可复制文本格式）
-- 视频预览功能
-- 任务历史记录
-- 多模型配置支持
-- 截图自动插入（可选）
+### 📝 智能视频笔记
+- **视频上传与转录**：支持上传本地视频，自动提取音频并转录为文字
+- **AI笔记生成**：基于转录内容，使用AI模型生成结构化笔记
+- **多模型支持**：集成OpenAI、本地LM Studio、Ollama等多种AI模型
+- **截图功能**：为视频生成代表性截图，增强笔记可视化
 
-### FFmpeg 说明
+### 🎞️ B站视频下载
+- **批量下载管理**：添加多个B站视频链接，统一管理下载队列
+- **自定义配置**：
+  - 视频清晰度选择（360P - 1080P）
+  - 自定义下载路径
+  - 下载间隔设置
+  - 无头模式（后台运行）
+- **实时状态跟踪**：下载进度实时显示，支持手动刷新
+- **下载历史记录**：完整记录所有下载历史，包括文件路径、大小等信息
 
-项目会自动处理 FFmpeg 的安装和使用：
+## 🚀 技术栈
 
-- 如果系统已安装 FFmpeg，会优先使用系统版本
-- 如果没有安装，首次运行时会自动下载 FFmpeg 到项目目录（`backend/ffmpeg_bin/`）
-- 使用 `imageio-ffmpeg` 包自动管理 FFmpeg 二进制文件
+### 后端
+- **框架**：FastAPI
+- **数据库**：SQLite + SQLAlchemy ORM
+- **转录**：faster-whisper
+- **视频处理**：opencv-python, ffmpeg-python
+- **B站下载**：playwright, yt-dlp, httpx
 
-如果你想使用系统级别的 FFmpeg，可以手动安装：
+### 前端
+- **框架**：React + TypeScript
+- **构建工具**：Vite
+- **UI组件**：Lucide React Icons
+- **通知**：react-hot-toast
+- **状态管理**：React Hooks
 
-```bash
-# Mac
-brew install ffmpeg
+## 📦 安装指南
 
-# Ubuntu/Debian
-sudo apt install ffmpeg
+### 环境要求
+- Python 3.8+
+- Node.js 16+
+- FFmpeg（视频处理）
 
-# Windows
-# 从 https://ffmpeg.org/download.html 下载安装
-```
-
-## 安装
-
-### 后端配置
-
-#### 方式一：使用启动脚本（推荐）
-
-启动脚本会自动创建和激活虚拟环境：
-
-```bash
-cd backend
-
-# Linux/Mac
-chmod +x start.sh
-./start.sh
-
-# Windows
-start.bat
-```
-
-#### 方式二：手动配置
+### 后端安装
 
 ```bash
 cd backend
 
 # 创建虚拟环境
-python3 -m venv venv
-
-# 激活虚拟环境
-# Linux/Mac:
-source venv/bin/activate
-# Windows:
-# venv\Scripts\activate
-
-# 升级 pip
-pip install --upgrade pip
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
 
 # 安装依赖
 pip install -r requirements.txt
+
+# 首次运行需要安装 Playwright 浏览器
+playwright install chromium
 ```
 
-### 前端配置
+### 前端安装
 
 ```bash
 cd frontend
 
-# 安装依赖
-npm install
-# 或
+# 安装依赖（使用 pnpm）
 pnpm install
-# 或
-yarn install
+
+# 或使用 npm
+npm install
 ```
 
-## 使用
+## 🎯 运行项目
 
 ### 启动后端
 
-如果使用启动脚本，直接运行即可。如果手动配置，需要先激活虚拟环境：
-
 ```bash
-# 确保虚拟环境已激活（命令行前会显示 (venv)）
-# 然后运行
+cd backend
+source venv/bin/activate
 python main.py
 ```
 
-**注意：每次启动前都需要激活虚拟环境！**
-
-后端将在 `http://localhost:8483` 启动
+后端服务将运行在 `http://localhost:8483`
 
 ### 启动前端
 
 ```bash
 cd frontend
-
-# 启动开发服务器
-npm run dev
-# 或
 pnpm dev
+# 或 npm run dev
 ```
 
-前端将在 `http://localhost:5173` 启动
+前端将运行在 `http://localhost:5173`
 
-### 使用流程
+## 📖 使用说明
 
-1. 打开浏览器访问 `http://localhost:5173`
-2. 在"模型配置"页面配置你的 AI 模型：
-   - **本地运行（推荐）**：选择 Ollama，配置本地模型（如 `llama3.2:3b`、`qwen2.5:4b` 等），无需 API 密钥
-   - **云端 API**：也可选择 OpenAI/DeepSeek/Qwen 等云端 API
-3. 在"上传"页面选择视频或音频文件
-4. 在任务列表中选择任务，按步骤执行：
-   - 文件上传（可查看视频）
-   - 提取音频
-   - 音频转写（可查看转写结果）
-   - 生成笔记（可查看 Markdown 笔记）
-5. 下载生成的 Markdown 或 PDF 文件
+### 视频笔记生成
 
-### 本地运行配置（Ollama）
+1. **配置AI模型**：
+   - 进入"模型配置"页面
+   - 添加并配置你的AI模型（OpenAI API Key、本地模型等）
 
-如需完全离线运行，推荐使用 Ollama 本地模型：
+2. **上传视频**：
+   - 进入"任务"页面
+   - 上传视频文件或从B站下载目录选择
+   - 等待自动转录完成
 
-1. **安装 Ollama**（如果尚未安装）：
+3. **生成笔记**：
+   - 转录完成后，点击"生成笔记"
+   - AI将基于转录内容生成结构化笔记
+   - 支持查看、编辑和导出笔记
 
-   ```bash
-   # Mac/Linux
-   curl -fsSL https://ollama.com/install.sh | sh
+### B站视频下载
 
-   # Windows
-   # 从 https://ollama.com/download 下载安装
-   ```
-2. **下载模型**（推荐 4B 参数模型，性能与速度平衡）：
+1. **配置下载参数**：
+   - 进入"B站下载"页面
+   - 设置视频清晰度、保存路径、下载间隔等
 
-   ```bash
-   # 下载 4B 模型示例
-   ollama pull llama3.2:3b
-   # 或
-   ollama pull qwen2.5:4b
-   # 或
-   ollama pull phi3:mini
-   ```
-3. **在模型配置中选择 Ollama**：
+2. **添加视频**：
+   - 在视频列表区域输入B站视频URL或BV号
+   - 点击"添加"将视频加入下载队列
 
-   - 模型类型选择 "Ollama"
-   - 模型名称填写你下载的模型（如 `llama3.2:3b`）
-   - API 地址默认为 `http://localhost:11434`（Ollama 默认端口）
+3. **开始下载**：
+   - 点击"开始下载"按钮
+   - 首次下载需要扫码登录B站账号（登录状态会保存）
+   - 下载状态会实时更新
 
-**优势**：
+4. **查看历史**：
+   - 下载历史面板显示所有已完成的下载
+   - 包含文件路径、大小、下载时间等信息
 
-- 完全离线运行，无需网络连接
-- 数据不上传，保护隐私
-- 无需 API 密钥，无使用费用
-- 4B 模型在普通硬件上即可流畅运行
-
-## 项目结构
+## 📁 项目结构
 
 ```
 video-Ai-note/
-├── backend/          # FastAPI 后端
+├── backend/                 # 后端服务
 │   ├── app/
-│   │   ├── routers/  # API 路由
-│   │   ├── services/ # 业务逻辑
-│   │   ├── transcriber/ # 音频转文字
-│   │   ├── gpt/      # GPT 集成
-│   │   └── db/       # 数据库
-│   ├── uploads/      # 上传文件存储
-│   ├── note_results/ # 笔记结果存储
-│   └── main.py
-└── frontend/         # React 前端
-    └── src/
-        ├── components/ # 组件
-        ├── services/   # API 服务
-        └── store/     # 状态管理
+│   │   ├── db/             # 数据库模型和DAO
+│   │   ├── routers/        # API路由
+│   │   ├── services/       # 业务逻辑
+│   │   │   ├── bilibili/   # B站下载核心模块
+│   │   │   └── ...
+│   │   ├── transcriber/    # 转录服务
+│   │   └── utils/          # 工具函数
+│   ├── uploads/            # 上传和下载目录
+│   └── main.py             # 入口文件
+│
+├── frontend/               # 前端应用
+│   ├── src/
+│   │   ├── components/     # React组件
+│   │   ├── pages/          # 页面组件
+│   │   ├── services/       # API服务层
+│   │   └── App.tsx         # 应用入口
+│   └── vite.config.ts      # Vite配置
+│
+└── README.md
 ```
 
-## 注意事项
+## 🔧 配置说明
 
-- **数据隐私**：所有视频、音频、转写文本和生成的笔记均存储在本地，不会上传到任何服务器
-- **本地运行**：使用 Ollama 等本地模型时，完全离线运行，无需网络连接和 API 密钥
-- 必须使用 Python 虚拟环境（推荐使用启动脚本自动管理）
-- FFmpeg 会自动下载到项目目录，无需手动安装
-- 首次运行会自动创建数据库
-- 上传的视频文件会保存在 `backend/uploads` 目录
-- 生成的笔记和截图会保存在 `backend/note_results` 目录
-- FFmpeg 二进制文件会保存在 `backend/ffmpeg_bin/` 目录（自动创建）
-- 详细虚拟环境使用指南请查看 [VENV_GUIDE.md](backend/VENV_GUIDE.md)
+### 环境变量
+
+后端支持以下环境变量配置：
+
+```bash
+# API服务端口
+PORT=8483
+
+# 数据库路径（可选，默认使用SQLite）
+DATABASE_URL=sqlite:///./video_note.db
+```
+
+### 代理配置
+
+如果您在使用外部AI模型API时需要代理，后端会自动清除代理环境变量以确保本地模型正常访问。
+
+## ⚠️ 注意事项
+
+1. **B站下载功能**：
+   - 首次使用需要登录B站账号
+   - 下载高清视频可能需要大会员权限
+   - 请遵守B站服务条款，合理使用
+
+2. **模型配置**：
+   - OpenAI等外部模型需要有效的API Key
+   - 本地模型（LM Studio/Ollama）需要单独安装和运行
+
+3. **性能优化**：
+   - 大文件转录可能需要较长时间
+   - 建议根据硬件配置调整whisper模型大小
+
+## 📝 更新日志
+
+### v2.0.0 (2026-01-07)
+- ✨ 新增B站视频批量下载功能
+- ✨ 完整的下载配置和历史管理
+- 🐛 修复前端状态同步问题
+- 🎨 优化UI，添加刷新按钮和运行中状态显示
+
+### v1.0.0
+- 🎉 初始版本发布
+- 📝 视频转录和AI笔记生成功能
+- 🤖 多模型支持
+
+## 📄 许可证
+
+本项目采用 MIT 许可证。
+
+## 🤝 贡献
+
+欢迎提交 Issue 和 Pull Request！
+
+---
+
+如有问题或建议，请随时联系。
