@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Trash2, X, Video } from 'lucide-react'
+import { Trash2, X, Video, RefreshCw } from 'lucide-react'
 import { getBiliVideos, addBiliVideo, deleteBiliVideo, clearBiliVideos, BiliVideo } from '../services/biliApi'
 import toast from 'react-hot-toast'
 
@@ -7,9 +7,13 @@ const BiliVideoList: React.FC = () => {
     const [videos, setVideos] = useState<BiliVideo[]>([])
     const [inputUrl, setInputUrl] = useState('')
     const [loading, setLoading] = useState(false)
+    const [refreshing, setRefreshing] = useState(false)
 
     useEffect(() => {
         loadVideos()
+        // 每5秒自动刷新视频列表
+        const interval = setInterval(loadVideos, 5000)
+        return () => clearInterval(interval)
     }, [])
 
     const loadVideos = async () => {
@@ -19,6 +23,13 @@ const BiliVideoList: React.FC = () => {
         } catch (error) {
             console.error('加载视频列表失败:', error)
         }
+    }
+
+    const handleRefresh = async () => {
+        setRefreshing(true)
+        await loadVideos()
+        setRefreshing(false)
+        toast.success('列表已刷新')
     }
 
     const handleAdd = async () => {
@@ -65,11 +76,13 @@ const BiliVideoList: React.FC = () => {
     const getStatusBadge = (status: string) => {
         const badges = {
             pending: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
+            running: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
             downloaded: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
             failed: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200',
         }
         const labels = {
             pending: '待下载',
+            running: '下载中',
             downloaded: '已完成',
             failed: '失败',
         }
@@ -83,7 +96,17 @@ const BiliVideoList: React.FC = () => {
     return (
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
             <div className="flex items-center justify-between mb-6">
-                <h2 className="text-2xl font-bold text-gray-900 dark:text-white">视频列表</h2>
+                <div className="flex items-center gap-3">
+                    <h2 className="text-2xl font-bold text-gray-900 dark:text-white">视频列表</h2>
+                    <button
+                        onClick={handleRefresh}
+                        disabled={refreshing}
+                        className={`p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition ${refreshing ? 'animate-spin' : ''}`}
+                        title="刷新列表"
+                    >
+                        <RefreshCw className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                    </button>
+                </div>
                 {videos.length > 0 && (
                     <button
                         onClick={handleClear}

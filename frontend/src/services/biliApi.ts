@@ -33,7 +33,7 @@ export interface BiliVideo {
     bv_id: string
     url: string
     title?: string
-    status: 'pending' | 'downloaded' | 'failed'
+    status: 'pending' | 'running' | 'downloaded' | 'failed'
     created_at?: string
 }
 
