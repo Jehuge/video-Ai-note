@@ -139,7 +139,7 @@ class BilibiliDownloader:
             
             # 更新任务进度
             if self.task_manager:
-                self.task_manager.update_progress(video_url, idx - 1, 0)
+                await self.task_manager.update_progress(video_url, idx - 1, 0)
             
             try:
                 # 更新数据库状态为下载中
@@ -167,7 +167,7 @@ class BilibiliDownloader:
                 
                 # 更新完成进度
                 if self.task_manager:
-                    self.task_manager.update_progress(video_url, idx, 100)
+                    await self.task_manager.update_progress(video_url, idx, 100)
                 
                 # 下载间隔
                 if idx < len(video_list):

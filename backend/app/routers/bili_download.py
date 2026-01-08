@@ -3,7 +3,7 @@ B站视频下载 API 路由
 """
 
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import List, Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
 from pydantic import BaseModel
 
@@ -14,6 +14,18 @@ from app.services.bilibili.help import parse_video_info_from_url
 from app.utils.bili_logger import logger
 
 router = APIRouter()
+
+
+# ==================== 初始化 WebSocket 回调 ====================
+
+def _setup_websocket_callbacks():
+    """设置 WebSocket 回调函数"""
+    task_manager.set_log_callback(connection_manager.send_log)
+    task_manager.set_progress_callback(connection_manager.send_progress)
+    task_manager.set_status_callback(connection_manager.send_status_change)
+
+# 模块加载时初始化回调
+_setup_websocket_callbacks()
 
 
 # ==================== 数据模型 ====================
@@ -58,12 +70,7 @@ async def update_config(config: ConfigUpdate):
         if config_dict:
             bili_dao.update_bili_config(config_dict)
         
-        await connection_manager.broadcast({
-            "type": "log",
-            "timestamp": datetime.now().isoformat(),
-            "level": "info",
-            "message": "配置已更新"
-        })
+        await connection_manager.send_log("info", "配置已更新")
         
         return {"success": True, "message": "配置更新成功"}
     except Exception as e:
@@ -104,12 +111,7 @@ async def add_video(video: VideoAdd):
         # 添加到数据库
         result = bili_dao.create_bili_video(bv_id=bv_id, url=video.url)
         
-        await connection_manager.broadcast({
-            "type": "log",
-            "timestamp": datetime.now().isoformat(),
-            "level": "info",
-            "message": f"已添加视频: {bv_id}"
-        })
+        await connection_manager.send_log("info", f"已添加视频: {bv_id}")
         
         return {
             "success": True,
@@ -136,12 +138,7 @@ async def delete_video(video_id: int):
         if not success:
             raise HTTPException(status_code=404, detail="视频不存在")
         
-        await connection_manager.broadcast({
-            "type": "log",
-            "timestamp": datetime.now().isoformat(),
-            "level": "info",
-            "message": f"已删除视频 ID: {video_id}"
-        })
+        await connection_manager.send_log("info", f"已删除视频 ID: {video_id}")
         
         return {"success": True, "message": "视频删除成功"}
     except HTTPException:
@@ -157,12 +154,7 @@ async def clear_videos():
     try:
         bili_dao.clear_bili_videos()
         
-        await connection_manager.broadcast({
-            "type": "log",
-            "timestamp": datetime.now().isoformat(),
-            "level": "warning",
-            "message": "已清空视频列表"
-        })
+        await connection_manager.send_log("warning", "已清空视频列表")
         
         return {"success": True, "message": "视频列表已清空"}
     except Exception as e:
@@ -209,7 +201,7 @@ async def start_download(params: Optional[DownloadStart] = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@ router.post("/bili/download/stop")
+@router.post("/bili/download/stop")
 async def stop_download():
     """停止下载"""
     try:
@@ -257,16 +249,23 @@ async def get_download_history(limit: int = 50):
 
 @router.websocket("/ws/bili/logs")
 async def websocket_logs(websocket: WebSocket):
-    """WebSocket 日志推送"""
+    """WebSocket 日志和进度推送"""
     await connection_manager.connect(websocket)
     
     try:
         # 发送欢迎消息
         await websocket.send_json({
-            "type": "log",
+            "type": "connected",
             "timestamp": datetime.now().isoformat(),
-            "level": "info",
             "message": "WebSocket 连接成功"
+        })
+        
+        # 发送当前状态
+        status = task_manager.get_status()
+        await websocket.send_json({
+            "type": "progress",
+            "timestamp": datetime.now().isoformat(),
+            "data": status
         })
         
         # 保持连接

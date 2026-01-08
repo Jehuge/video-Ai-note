@@ -3,8 +3,12 @@ import BiliConfig from '../components/BiliConfig'
 import BiliVideoList from '../components/BiliVideoList'
 import BiliDownloadControl from '../components/BiliDownloadControl'
 import BiliHistoryPanel from '../components/BiliLogs'
+import BiliRealtimeLogs from '../components/BiliRealtimeLogs'
+import { useBiliWebSocket } from '../hooks/useBiliWebSocket'
 
 const BiliDownload: React.FC = () => {
+    const { isConnected, logs, progress, clearLogs } = useBiliWebSocket()
+
     return (
         <div className="h-full overflow-y-auto bg-gray-50 dark:bg-gray-900 p-6">
             <div className="max-w-7xl mx-auto pb-6">
@@ -23,7 +27,7 @@ const BiliDownload: React.FC = () => {
                     {/* 左侧列 */}
                     <div className="space-y-6">
                         <BiliConfig />
-                        <BiliDownloadControl />
+                        <BiliDownloadControl progress={progress} />
                     </div>
 
                     {/* 右侧列 */}
@@ -32,7 +36,16 @@ const BiliDownload: React.FC = () => {
                     </div>
                 </div>
 
-                {/* 下载历史 - 全宽 */}
+                {/* 实时日志 */}
+                <div className="mt-6">
+                    <BiliRealtimeLogs
+                        logs={logs}
+                        isConnected={isConnected}
+                        onClear={clearLogs}
+                    />
+                </div>
+
+                {/* 下载历史 */}
                 <div className="mt-6">
                     <BiliHistoryPanel />
                 </div>

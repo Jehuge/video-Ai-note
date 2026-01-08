@@ -1,40 +1,21 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 import { Play, Square, Loader2 } from 'lucide-react'
-import { startDownload, stopDownload, getDownloadStatus, DownloadStatus } from '../services/biliApi'
+import { startDownload, stopDownload } from '../services/biliApi'
+import { DownloadProgress } from '../hooks/useBiliWebSocket'
 import toast from 'react-hot-toast'
 
-const BiliDownloadControl: React.FC = () => {
-    const [status, setStatus] = useState<DownloadStatus>({
-        status: 'idle',
-        task_id: null,
-        current_video: null,
-        total: 0,
-        completed: 0,
-        progress: 0,
-    })
+interface BiliDownloadControlProps {
+    progress: DownloadProgress
+}
+
+const BiliDownloadControl: React.FC<BiliDownloadControlProps> = ({ progress }) => {
     const [loading, setLoading] = useState(false)
-
-    useEffect(() => {
-        loadStatus()
-        const interval = setInterval(loadStatus, 2000) // 每2秒刷新状态
-        return () => clearInterval(interval)
-    }, [])
-
-    const loadStatus = async () => {
-        try {
-            const data = await getDownloadStatus()
-            setStatus(data)
-        } catch (error) {
-            console.error('获取状态失败:', error)
-        }
-    }
 
     const handleStart = async () => {
         setLoading(true)
         try {
             const response = await startDownload()
             toast.success(response.message)
-            await loadStatus()
         } catch (error: any) {
             toast.error(error.response?.data?.detail || '启动下载失败')
         } finally {
@@ -47,7 +28,6 @@ const BiliDownloadControl: React.FC = () => {
         try {
             const response = await stopDownload()
             toast.success(response.message)
-            await loadStatus()
         } catch (error: any) {
             toast.error(error.response?.data?.detail || '停止下载失败')
         } finally {
@@ -55,8 +35,8 @@ const BiliDownloadControl: React.FC = () => {
         }
     }
 
-    const isRunning = status.status === 'running'
-    const progressPercent = status.total > 0 ? (status.completed / status.total) * 100 : 0
+    const isRunning = progress.status === 'running'
+    const progressPercent = progress.total > 0 ? (progress.completed / progress.total) * 100 : 0
 
     return (
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
@@ -67,22 +47,22 @@ const BiliDownloadControl: React.FC = () => {
                 <div className="flex items-center justify-between">
                     <span className="text-sm font-medium text-gray-700 dark:text-gray-300">状态:</span>
                     <span className={`px-3 py-1 text-sm font-semibold rounded-full ${isRunning
-                            ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
-                            : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200'
+                        ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                        : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200'
                         }`}>
-                        {isRunning ? '下载中' : '空闲'}
+                        {isRunning ? '下载中' : progress.status === 'stopped' ? '已停止' : '空闲'}
                     </span>
                 </div>
 
                 {isRunning && (
                     <>
-                        {status.current_video && (
+                        {progress.current_video && (
                             <div>
                                 <span className="text-sm font-medium text-gray-700 dark:text-gray-300 block mb-1">
                                     当前视频:
                                 </span>
                                 <span className="font-mono text-sm text-gray-900 dark:text-white">
-                                    {status.current_video}
+                                    {progress.current_video}
                                 </span>
                             </div>
                         )}
@@ -93,7 +73,7 @@ const BiliDownloadControl: React.FC = () => {
                                     总体进度:
                                 </span>
                                 <span className="text-sm text-gray-600 dark:text-gray-400">
-                                    {status.completed} / {status.total}
+                                    {progress.completed} / {progress.total}
                                 </span>
                             </div>
                             <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3 overflow-hidden">
@@ -107,20 +87,20 @@ const BiliDownloadControl: React.FC = () => {
                             </div>
                         </div>
 
-                        {status.progress > 0 && (
+                        {progress.progress > 0 && (
                             <div>
                                 <div className="flex items-center justify-between mb-2">
                                     <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
                                         当前视频进度:
                                     </span>
                                     <span className="text-sm text-gray-600 dark:text-gray-400">
-                                        {status.progress}%
+                                        {progress.progress}%
                                     </span>
                                 </div>
                                 <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
                                     <div
                                         className="bg-green-500 h-2 rounded-full transition-all duration-300"
-                                        style={{ width: `${status.progress}%` }}
+                                        style={{ width: `${progress.progress}%` }}
                                     />
                                 </div>
                             </div>

@@ -1,9 +1,10 @@
 """
 WebSocket 连接管理器
-用于实时日志推送
+用于实时日志推送和下载进度更新
 """
 
-from typing import List
+from typing import List, Dict, Any
+from datetime import datetime
 from fastapi import WebSocket
 
 from app.utils.bili_logger import logger
@@ -29,6 +30,9 @@ class ConnectionManager:
     
     async def broadcast(self, message: dict):
         """广播消息到所有连接"""
+        if not self.active_connections:
+            return
+            
         disconnected = []
         for connection in self.active_connections:
             try:
@@ -41,6 +45,39 @@ class ConnectionManager:
         for conn in disconnected:
             if conn in self.active_connections:
                 self.active_connections.remove(conn)
+    
+    async def send_log(self, level: str, message: str):
+        """发送日志消息"""
+        await self.broadcast({
+            "type": "log",
+            "timestamp": datetime.now().isoformat(),
+            "level": level,
+            "message": message
+        })
+    
+    async def send_progress(self, status: str, current_video: str, 
+                           total: int, completed: int, progress: int = 0):
+        """发送下载进度"""
+        await self.broadcast({
+            "type": "progress",
+            "timestamp": datetime.now().isoformat(),
+            "data": {
+                "status": status,
+                "current_video": current_video,
+                "total": total,
+                "completed": completed,
+                "progress": progress
+            }
+        })
+    
+    async def send_status_change(self, status: str, message: str = ""):
+        """发送状态变更通知"""
+        await self.broadcast({
+            "type": "status",
+            "timestamp": datetime.now().isoformat(),
+            "status": status,
+            "message": message
+        })
 
 
 # 全局连接管理器实例
