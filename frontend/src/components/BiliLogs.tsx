@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { History, RefreshCw } from 'lucide-react'
+import { FileVideo, RefreshCw } from 'lucide-react'
 import { getBiliHistory, BiliDownloadHistory } from '../services/biliApi'
 
 const BiliHistoryPanel: React.FC = () => {
@@ -8,24 +8,18 @@ const BiliHistoryPanel: React.FC = () => {
 
     useEffect(() => {
         loadHistory()
-        // 每10秒自动刷新历史
-        const interval = setInterval(loadHistory, 10000)
-        return () => clearInterval(interval)
     }, [])
 
     const loadHistory = async () => {
+        setLoading(true)
         try {
-            const data = await getBiliHistory(20)
+            const data = await getBiliHistory(50)
             setHistory(data)
         } catch (error) {
             console.error('加载下载历史失败:', error)
+        } finally {
+            setLoading(false)
         }
-    }
-
-    const handleRefresh = async () => {
-        setLoading(true)
-        await loadHistory()
-        setLoading(false)
     }
 
     const formatFileSize = (bytes: number) => {
@@ -34,71 +28,47 @@ const BiliHistoryPanel: React.FC = () => {
         return (bytes / 1024 / 1024).toFixed(1) + ' MB'
     }
 
-    const formatDate = (dateStr: string) => {
-        const date = new Date(dateStr)
-        return date.toLocaleString('zh-CN', {
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit'
-        })
-    }
-
     return (
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
-            <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2">
-                    <History className="w-6 h-6 text-gray-700 dark:text-gray-300" />
-                    <h2 className="text-2xl font-bold text-gray-900 dark:text-white">下载历史</h2>
-                </div>
+        <div className="space-y-1">
+            <div className="px-2 py-1 flex justify-end">
                 <button
-                    onClick={handleRefresh}
+                    onClick={loadHistory}
                     disabled={loading}
-                    className="p-2 text-gray-600 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 
-                   hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition"
-                    title="刷新"
+                    className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition rounded-md hover:bg-gray-100 dark:hover:bg-gray-800"
+                    title="刷新列表"
                 >
-                    <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
+                    <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
                 </button>
             </div>
 
             {history.length === 0 ? (
-                <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-                    <History className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                    <p>暂无下载记录</p>
+                <div className="text-center py-12 text-gray-400">
+                    <p className="text-xs">暂无历史记录</p>
                 </div>
             ) : (
-                <div className="space-y-2 max-h-80 overflow-y-auto">
-                    {history.map((item) => (
-                        <div
-                            key={item.id}
-                            className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg"
-                        >
-                            <div className="flex items-start justify-between">
-                                <div className="flex-1 min-w-0">
-                                    <p className="font-medium text-gray-900 dark:text-white truncate">
-                                        {item.title || item.bv_id}
-                                    </p>
-                                    <div className="flex items-center gap-3 mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                        <span className="font-mono">{item.bv_id}</span>
-                                        <span>•</span>
-                                        <span>{formatFileSize(item.file_size)}</span>
-                                        <span>•</span>
-                                        <span>{formatDate(item.downloaded_at)}</span>
-                                    </div>
+                history.map((item) => (
+                    <div
+                        key={item.id}
+                        className="group flex flex-col p-3 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700/50 cursor-pointer transition-colors border border-transparent hover:border-gray-200 dark:hover:border-gray-700"
+                    >
+                        <div className="flex items-start gap-3">
+                            <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-blue-600 dark:text-blue-400 shrink-0">
+                                <FileVideo className="w-4 h-4" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                                <h4 className="text-sm font-medium text-gray-900 dark:text-gray-100 leading-tight line-clamp-2 mb-1">
+                                    {item.title || item.bv_id}
+                                </h4>
+                                <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                                    <span className="font-mono">{formatFileSize(item.file_size)}</span>
+                                    <span>•</span>
+                                    <span>{new Date(item.downloaded_at).toLocaleDateString()}</span>
                                 </div>
-                                <span className="ml-2 px-2 py-1 text-xs font-medium rounded bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 flex-shrink-0">
-                                    已完成
-                                </span>
                             </div>
                         </div>
-                    ))}
-                </div>
+                    </div>
+                ))
             )}
-
-            <div className="mt-4 text-sm text-gray-500 dark:text-gray-400">
-                共 {history.length} 条记录
-            </div>
         </div>
     )
 }
