@@ -37,7 +37,13 @@ def run_note_task_step(task_id: str, video_path: str, filename: str, step: str, 
                 import json
                 with open(config_file, "r", encoding="utf-8") as f:
                     model_config = json.load(f)
-                logger.info(f"加载模型配置: {model_config}")
+                logger.info(
+                    "加载模型配置: "
+                    f"provider={model_config.get('provider')}, "
+                    f"type={model_config.get('provider_type')}, "
+                    f"model={model_config.get('model')}, "
+                    f"style={model_config.get('note_style')}"
+                )
             except Exception as e:
                 logger.warning(f"读取模型配置失败: {e}, 将使用默认配置")
         
@@ -310,7 +316,13 @@ def regenerate_note(
                     import json
                     with open(config_file, "r", encoding="utf-8") as f:
                         model_config_dict = json.load(f)
-                    logger.info(f"从文件加载模型配置: {model_config_dict}")
+                    logger.info(
+                        "从文件加载模型配置: "
+                        f"provider={model_config_dict.get('provider')}, "
+                        f"type={model_config_dict.get('provider_type')}, "
+                        f"model={model_config_dict.get('model')}, "
+                        f"style={model_config_dict.get('note_style')}"
+                    )
                 except Exception as e:
                     logger.warning(f"读取模型配置失败: {e}")
         
