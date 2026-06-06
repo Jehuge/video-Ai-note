@@ -8,14 +8,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
+from app.utils.app_paths import configure_app_environment
+
+load_dotenv()
+
+if os.getenv("VIDEO_NOTE_USE_PROJECT_DIR", "").lower() not in {"1", "true", "yes"}:
+    configure_app_environment()
+
 from app.db.init_db import init_db
 from app.exceptions.exception_handlers import register_exception_handlers
 from app.utils.logger import get_logger
 from app import create_app
-from app.transcriber.transcriber_provider import get_transcriber
 
 logger = get_logger(__name__)
-load_dotenv()
 
 # 清除代理设置，避免 httpx 使用系统代理导致连接失败
 for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']:
@@ -37,11 +42,7 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # 初始化数据库
     init_db()
-    
-    # 初始化转录器
-    transcriber_type = os.getenv("TRANSCRIBER_TYPE", "fast-whisper")
-    get_transcriber(transcriber_type=transcriber_type)
-    
+
     logger.info("应用启动完成")
     yield
     logger.info("应用关闭")
@@ -59,6 +60,7 @@ origins = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex=r"^(chrome-extension|moz-extension)://.*$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

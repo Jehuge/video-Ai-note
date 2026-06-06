@@ -8,6 +8,7 @@ from typing import Optional, List, Tuple
 from app.db.video_task_dao import update_task_status
 from app.gpt.openai_gpt import OpenAIGPT
 from app.models.notes_model import NoteResult
+from app.services.model_provider import normalize_api_key, normalize_base_url, normalize_provider_type
 from app.transcriber.transcriber_provider import get_transcriber
 from app.utils.logger import get_logger
 from app.utils.video_helper import generate_screenshot
@@ -41,30 +42,18 @@ class NoteGenerator:
                 # 使用提供的模型配置
                 # 使用提供的模型配置
                 provider = self.model_config.get('provider', 'openai')
-                provider_type = self.model_config.get('provider_type', 'openai') 
-                # 兼容旧配置：如果 provider 是 ollama，则 type 也是 ollama
-                if provider == 'ollama':
-                    provider_type = 'ollama'
-                    
-                api_key = self.model_config.get('api_key', '')
-                base_url = self.model_config.get('base_url', '')
+                provider_type = normalize_provider_type(provider, self.model_config.get('provider_type', 'openai'))
+                api_key = normalize_api_key(provider_type, self.model_config.get('api_key', ''))
+                base_url = normalize_base_url(provider_type, self.model_config.get('base_url', ''))
                 model = self.model_config.get('model', '')
                 
                 logger.info(f"使用模型配置: provider={provider}, type={provider_type}, model={model}, base_url={base_url}")
                 
                 # 根据提供商类型创建对应的 GPT 实例
                 if provider_type == 'ollama':
-                    # Ollama 使用 OpenAI 兼容接口
-                    # 确保 base_url 正确
-                    if not base_url or base_url.strip() == '':
-                        base_url = 'http://127.0.0.1:11434/v1'
-                    elif not base_url.endswith('/v1'):
-                        # 如果 base_url 不包含 /v1，添加它
-                        base_url = base_url.rstrip('/') + '/v1'
-                    
                     logger.info(f"初始化 Ollama GPT: base_url={base_url}, model={model}")
                     self.gpt = OpenAIGPT(
-                        api_key=api_key or 'ollama',  # Ollama 不需要真实的 API key
+                        api_key=api_key,
                         base_url=base_url,
                         model=model
                     )
@@ -137,7 +126,7 @@ class NoteGenerator:
             
         except Exception as exc:
             logger.error(f"生成笔记失败 (task_id={task_id}): {exc}", exc_info=True)
-            update_task_status(task_id, "failed")
+            update_task_status(task_id, "failed", error_message=str(exc))
             raise
     
     def _extract_audio(self, video_path: str, task_id: str) -> str:
@@ -195,7 +184,15 @@ class NoteGenerator:
                 )
         
         # 执行转录
-        transcript = self.transcriber.transcript(audio_path)
+        try:
+            transcript = self.transcriber.transcript(audio_path)
+        except Exception as exc:
+            logger.error(f"转录失败: audio_path={audio_path}, task_id={task_id}, error={exc}", exc_info=True)
+            raise
+
+        if not transcript.full_text.strip() and not transcript.segments:
+            logger.warning(f"转录结果为空: audio_path={audio_path}, task_id={task_id}")
+            raise RuntimeError("本地语音识别没有识别到有效语音。请确认视频有清晰人声，或在设置里调小模型后重试。")
         
         # 保存缓存
         with open(cache_file, 'w', encoding='utf-8') as f:

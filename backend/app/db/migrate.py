@@ -30,30 +30,36 @@ else:
 
 
 def migrate_add_screenshot_column():
-    """添加 screenshot 字段到 video_tasks 表"""
+    """Add missing columns to the video_tasks table."""
     if not Path(DB_PATH).exists():
-        logger.info("数据库不存在，将在首次运行时自动创建")
+        logger.info("Database does not exist yet; tables will be created on first run")
         return
-    
+
+    migrations = [
+        ("screenshot", "ALTER TABLE video_tasks ADD COLUMN screenshot INTEGER DEFAULT 0"),
+        ("error_message", "ALTER TABLE video_tasks ADD COLUMN error_message TEXT"),
+        ("source", "ALTER TABLE video_tasks ADD COLUMN source TEXT NOT NULL DEFAULT 'upload'"),
+        ("source_url", "ALTER TABLE video_tasks ADD COLUMN source_url TEXT"),
+    ]
+
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        
-        # 检查字段是否已存在
         cursor.execute("PRAGMA table_info(video_tasks)")
-        columns = [column[1] for column in cursor.fetchall()]
-        
-        if "screenshot" not in columns:
-            logger.info("添加 screenshot 字段到 video_tasks 表...")
-            cursor.execute("ALTER TABLE video_tasks ADD COLUMN screenshot INTEGER DEFAULT 0")
-            conn.commit()
-            logger.info("✓ screenshot 字段添加成功")
-        else:
-            logger.info("screenshot 字段已存在，跳过迁移")
-        
+        columns = {column[1] for column in cursor.fetchall()}
+
+        for column, statement in migrations:
+            if column not in columns:
+                logger.info(f"Adding {column} column to video_tasks...")
+                cursor.execute(statement)
+                conn.commit()
+                logger.info(f"{column} column added")
+            else:
+                logger.info(f"{column} column already exists, skipping")
+
         conn.close()
     except Exception as e:
-        logger.error(f"数据库迁移失败: {e}")
+        logger.error(f"Database migration failed: {e}")
         raise
 
 

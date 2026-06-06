@@ -1,0 +1,316 @@
+import sys
+import types
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest import mock
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.services import web_video
+from app.routers.extension import ImportRequest
+
+
+class WebVideoServiceTests(unittest.TestCase):
+    def test_resolve_falls_back_to_detected_stream_when_ytdlp_fails(self):
+        class FakeYoutubeDL:
+            def __init__(self, _options):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def extract_info(self, *_args, **_kwargs):
+                raise RuntimeError("unsupported site")
+
+        with mock.patch.dict(sys.modules, {"yt_dlp": types.SimpleNamespace(YoutubeDL=FakeYoutubeDL)}):
+            result = web_video.resolve_web_video(
+                page_url="https://example.test/watch",
+                page_title="Demo",
+                detected_streams=[
+                    {"url": "https://cdn.example.test/video.m3u8", "mimeType": "application/vnd.apple.mpegurl"},
+                    {"url": "https://cdn.example.test/video.m3u8", "mimeType": "application/vnd.apple.mpegurl"},
+                    {"url": "https://cdn.example.test/asset.css", "mimeType": "text/css"},
+                ],
+            )
+
+        self.assertEqual(result["errors"], [
+            "page: unsupported site",
+            "stream https://cdn.example.test/video.m3u8: unsupported site",
+        ])
+        self.assertEqual(len(result["candidates"]), 1)
+        candidate = result["candidates"][0]
+        self.assertEqual(candidate["extractor"], "browser-detected")
+        self.assertEqual(candidate["formats"][0]["protocol"], "m3u8")
+
+    def test_resolve_sorts_ytdlp_formats_by_quality(self):
+        class FakeYoutubeDL:
+            def __init__(self, _options):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def extract_info(self, *_args, **_kwargs):
+                return {
+                    "title": "Resolved",
+                    "webpage_url": "https://video.example.test/watch",
+                    "extractor": "generic",
+                    "formats": [
+                        {"format_id": "360", "height": 360, "ext": "mp4", "filesize": 100},
+                        {"format_id": "1080", "height": 1080, "ext": "mp4", "filesize": 300},
+                        {"format_id": "storyboard", "protocol": "mhtml"},
+                    ],
+                }
+
+        with mock.patch.dict(sys.modules, {"yt_dlp": types.SimpleNamespace(YoutubeDL=FakeYoutubeDL)}):
+            result = web_video.resolve_web_video(page_url="https://video.example.test/watch")
+
+        formats = result["candidates"][0]["formats"]
+        self.assertEqual([fmt["formatId"] for fmt in formats], ["1080", "360"])
+
+    def test_resolve_video_only_formats_request_best_audio(self):
+        class FakeYoutubeDL:
+            def __init__(self, _options):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def extract_info(self, *_args, **_kwargs):
+                return {
+                    "title": "Resolved",
+                    "formats": [
+                        {"format_id": "720", "height": 720, "ext": "mp4", "vcodec": "avc1", "acodec": "none"},
+                        {"format_id": "audio", "ext": "m4a", "vcodec": "none", "acodec": "mp4a"},
+                    ],
+                }
+
+        with mock.patch.dict(sys.modules, {"yt_dlp": types.SimpleNamespace(YoutubeDL=FakeYoutubeDL)}):
+            result = web_video.resolve_web_video(page_url="https://video.example.test/watch")
+
+        formats = result["candidates"][0]["formats"]
+        self.assertEqual(formats[0]["formatId"], "720+ba/best")
+        self.assertEqual(formats[0]["rawFormatId"], "720")
+
+    def test_resolve_expands_detected_hls_manifest_formats(self):
+        calls = []
+
+        class FakeYoutubeDL:
+            def __init__(self, options):
+                self.options = options
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def extract_info(self, url, **_kwargs):
+                calls.append((url, self.options))
+                if url == "https://page.example.test/watch":
+                    raise RuntimeError("unsupported page")
+                return {
+                    "title": "Manifest video",
+                    "webpage_url": url,
+                    "extractor": "generic",
+                    "formats": [
+                        {"format_id": "hls-360", "height": 360, "ext": "mp4", "protocol": "m3u8_native"},
+                        {"format_id": "hls-1080", "height": 1080, "ext": "mp4", "protocol": "m3u8_native"},
+                    ],
+                }
+
+        with mock.patch.dict(sys.modules, {"yt_dlp": types.SimpleNamespace(YoutubeDL=FakeYoutubeDL)}):
+            result = web_video.resolve_web_video(
+                page_url="https://page.example.test/watch",
+                page_title="Page",
+                detected_streams=[
+                    {
+                        "url": "https://cdn.example.test/master.m3u8",
+                        "mimeType": "application/vnd.apple.mpegurl",
+                    }
+                ],
+            )
+
+        self.assertEqual([fmt["formatId"] for fmt in result["candidates"][0]["formats"]], ["hls-1080", "hls-360"])
+        self.assertTrue(result["candidates"][0]["id"].startswith("stream-"))
+        self.assertIn(("https://cdn.example.test/master.m3u8", mock.ANY), calls)
+        manifest_options = calls[-1][1]
+        self.assertEqual(manifest_options["http_headers"]["Referer"], "https://page.example.test/watch")
+        self.assertIn("User-Agent", manifest_options["http_headers"])
+
+    def test_resolve_filters_media_fragments_from_detected_streams(self):
+        class FakeYoutubeDL:
+            def __init__(self, _options):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def extract_info(self, *_args, **_kwargs):
+                raise RuntimeError("unsupported site")
+
+        with mock.patch.dict(sys.modules, {"yt_dlp": types.SimpleNamespace(YoutubeDL=FakeYoutubeDL)}):
+            result = web_video.resolve_web_video(
+                page_url="https://example.test/watch",
+                detected_streams=[
+                    {"url": "https://cdn.example.test/chunk-1.m4s", "mimeType": "video/iso.segment"},
+                    {"url": "https://cdn.example.test/seg-1.ts", "label": "HLS media segment"},
+                    {"url": "https://cdn.example.test/video.mp4", "mimeType": "video/mp4"},
+                ],
+            )
+
+        self.assertEqual(len(result["candidates"]), 1)
+        self.assertEqual(result["candidates"][0]["sourceUrl"], "https://cdn.example.test/video.mp4")
+
+    def test_choose_download_url_prefers_candidate_url(self):
+        url = web_video._choose_download_url({
+            "pageUrl": "https://example.test/page",
+            "candidateUrl": "https://cdn.example.test/video.m3u8",
+        })
+
+        self.assertEqual(url, "https://cdn.example.test/video.m3u8")
+
+    def test_ytdlp_options_set_network_timeouts(self):
+        options = web_video._yt_dlp_options()
+
+        self.assertEqual(options["socket_timeout"], 15)
+        self.assertEqual(options["retries"], 3)
+        self.assertEqual(options["fragment_retries"], 3)
+        self.assertIn("User-Agent", options["http_headers"])
+
+    def test_ytdlp_options_use_referer_and_cookie(self):
+        options = web_video._yt_dlp_options(
+            headers={"Accept-Language": "zh-CN", "Cookie": "ignored=1"},
+            cookie="SESSDATA=demo",
+            referer="https://example.test/watch",
+        )
+
+        self.assertEqual(options["http_headers"]["Referer"], "https://example.test/watch")
+        self.assertEqual(options["http_headers"]["Cookie"], "SESSDATA=demo")
+        self.assertEqual(options["http_headers"]["Accept-Language"], "zh-CN")
+        self.assertNotEqual(options["http_headers"]["Cookie"], "ignored=1")
+
+    def test_import_request_preserves_candidate_url(self):
+        payload = ImportRequest(
+            pageUrl="https://example.test/watch",
+            candidateId="page-url",
+            candidateUrl="https://cdn.example.test/video.m3u8",
+            formatId="detected",
+        )
+
+        self.assertEqual(payload.model_dump()["candidateUrl"], "https://cdn.example.test/video.m3u8")
+
+    def test_run_import_job_creates_task_and_skips_note_when_auto_run_false(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            upload_dir = tmp_path / "uploads"
+            output_dir = tmp_path / "notes"
+            upload_dir.mkdir()
+            output_dir.mkdir()
+            downloaded = tmp_path / "download.mp4"
+            downloaded.write_bytes(b"video")
+
+            created = {}
+
+            def fake_create_task(**kwargs):
+                created.update(kwargs)
+
+            class FakeNoteGenerator:
+                def __init__(self, *_args, **_kwargs):
+                    raise AssertionError("Note generation should not run when autoRun is false")
+
+            with mock.patch.object(web_video, "UPLOAD_DIR", upload_dir), \
+                    mock.patch.object(web_video, "NOTE_OUTPUT_DIR", output_dir), \
+                    mock.patch.object(web_video, "_download_with_ytdlp", return_value=downloaded), \
+                    mock.patch.object(web_video, "load_active_model_config", return_value={"model": "demo", "note_style": "simple"}), \
+                    mock.patch.object(web_video, "create_task", side_effect=fake_create_task), \
+                    mock.patch.object(web_video, "NoteGenerator", FakeNoteGenerator):
+                job = web_video.job_manager.create("https://example.test/watch")
+                web_video._run_import_job(job.job_id, {
+                    "pageUrl": "https://example.test/watch",
+                    "pageTitle": "Unsafe:/Title",
+                    "autoRun": False,
+                })
+
+            updated = web_video.job_manager.get(job.job_id)
+            self.assertEqual(updated.status, "completed")
+            self.assertTrue(updated.task_id)
+            self.assertEqual(created["source"], "web")
+            self.assertEqual(created["source_url"], "https://example.test/watch")
+            self.assertTrue((output_dir / f"{updated.task_id}_model_config.json").exists())
+            self.assertTrue(list(upload_dir.glob(f"{updated.task_id}.mp4")))
+
+    def test_run_import_job_uses_plugin_note_style(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            upload_dir = tmp_path / "uploads"
+            output_dir = tmp_path / "notes"
+            upload_dir.mkdir()
+            output_dir.mkdir()
+            downloaded = tmp_path / "download.mp4"
+            downloaded.write_bytes(b"video")
+
+            generated = {}
+
+            class FakeNoteGenerator:
+                def __init__(self, model_config=None):
+                    generated["model_config"] = model_config
+
+                def generate(self, **kwargs):
+                    generated.update(kwargs)
+
+            with mock.patch.object(web_video, "UPLOAD_DIR", upload_dir), \
+                    mock.patch.object(web_video, "NOTE_OUTPUT_DIR", output_dir), \
+                    mock.patch.object(web_video, "_download_with_ytdlp", return_value=downloaded), \
+                    mock.patch.object(web_video, "load_active_model_config", return_value={"model": "demo", "note_style": "simple"}), \
+                    mock.patch.object(web_video, "create_task"), \
+                    mock.patch.object(web_video, "NoteGenerator", FakeNoteGenerator):
+                job = web_video.job_manager.create("https://example.test/watch")
+                web_video._run_import_job(job.job_id, {
+                    "pageUrl": "https://example.test/watch",
+                    "pageTitle": "Style Demo",
+                    "noteStyle": "creative",
+                    "autoRun": True,
+                })
+
+            updated = web_video.job_manager.get(job.job_id)
+            config_file = output_dir / f"{updated.task_id}_model_config.json"
+            self.assertEqual(generated["note_style"], "creative")
+            self.assertEqual(generated["model_config"]["note_style"], "creative")
+            self.assertIn('"note_style": "creative"', config_file.read_text(encoding="utf-8"))
+
+    def test_run_import_job_marks_failed_on_download_error(self):
+        with mock.patch.object(web_video, "_download_with_ytdlp", side_effect=RuntimeError("boom")):
+            job = web_video.job_manager.create("https://example.test/watch")
+            web_video._run_import_job(job.job_id, {"pageUrl": "https://example.test/watch"})
+
+        updated = web_video.job_manager.get(job.job_id)
+        self.assertEqual(updated.status, "failed")
+        self.assertEqual(updated.error, "boom")
+
+    def test_canceled_job_is_not_overwritten_by_late_updates(self):
+        job = web_video.job_manager.create("https://example.test/watch")
+
+        web_video.job_manager.update(job.job_id, status="canceled", progress=100, message="Canceled in AInote")
+        web_video.job_manager.update(job.job_id, status="completed", progress=100, message="Done")
+
+        updated = web_video.job_manager.get(job.job_id)
+        self.assertEqual(updated.status, "canceled")
+        self.assertEqual(updated.message, "Canceled in AInote")
+
+
+if __name__ == "__main__":
+    unittest.main()

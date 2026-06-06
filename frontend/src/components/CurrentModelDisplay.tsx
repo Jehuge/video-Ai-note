@@ -1,13 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Brain } from 'lucide-react'
 import ProviderIcon from './ProviderIcon'
-
-interface ModelConfig {
-  provider: string
-  apiKey: string
-  baseUrl?: string
-  model: string
-}
+import { getSelectedModelDisplay } from '../utils/modelConfig'
 
 const PROVIDER_LABELS: Record<string, string> = {
   openai: 'OpenAI',
@@ -39,35 +33,16 @@ export default function CurrentModelDisplay() {
   useEffect(() => {
     const loadCurrentModel = () => {
       try {
-        const savedSelected = localStorage.getItem('selectedModel')
-        
-        if (!savedSelected) {
+        const selected = getSelectedModelDisplay()
+        if (!selected) {
           setCurrentModel(null)
           return
         }
 
-        // 解析选中的模型 ID（格式：provider-modelId）
-        // 例如：ollama-Llama-3.1-8B-Instruct-abliterated-GGUF:Q4_K_M
-        const firstDashIndex = savedSelected.indexOf('-')
-        if (firstDashIndex <= 0) {
-          setCurrentModel(null)
-          return
-        }
-
-        const providerId = savedSelected.substring(0, firstDashIndex)
-        const modelId = savedSelected.substring(firstDashIndex + 1)
-        
-        // 直接使用模型 ID 作为显示名称（去掉可能的 provider 前缀）
-        // 如果 modelId 包含 provider 前缀（如 ollama-Llama-3.1），则去掉
-        let modelName = modelId
-        if (modelId.startsWith(providerId + '-')) {
-          modelName = modelId.substring(providerId.length + 1)
-        }
-        
         setCurrentModel({
-          name: modelName,
-          provider: providerId,
-          providerName: PROVIDER_LABELS[providerId] || providerId,
+          name: selected.modelName,
+          provider: selected.providerType,
+          providerName: selected.providerName || PROVIDER_LABELS[selected.providerType] || selected.providerType,
         })
       } catch (error) {
         console.error('加载当前模型失败:', error)

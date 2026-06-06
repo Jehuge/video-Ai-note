@@ -1,0 +1,107 @@
+name: Desktop app build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - "codex/**"
+  pull_request:
+
+jobs:
+  windows:
+    name: Windows app
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build Windows app
+        shell: pwsh
+        run: .\scripts\build-windows.ps1 -SkipPlaywright
+
+      - name: Run backend tests
+        run: python -m unittest discover backend\tests
+
+      - name: Run extension tests
+        run: |
+          node extension/test-popup.js
+          node --check extension/background.js
+          node --check extension/content.js
+          node --check extension/popup.js
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VideoNoteAI-windows
+          path: |
+            backend/dist/VideoNoteAI-win.zip
+            backend/dist/VideoNoteAI/
+
+  macos:
+    name: macOS app
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Check macOS build script
+        run: bash -n ./scripts/build-macos.sh
+
+      - name: Check macOS packaging files
+        run: |
+          test -f backend/entitlements.mac.plist
+          python3 -m py_compile backend/video_note_ai.spec
+
+      - name: Build macOS app
+        env:
+          CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          SKIP_PLAYWRIGHT: "1"
+        run: bash ./scripts/build-macos.sh
+
+      - name: Run backend tests
+        run: python3 -m unittest discover backend/tests
+
+      - name: Run extension tests
+        run: |
+          node extension/test-popup.js
+          node --check extension/background.js
+          node --check extension/content.js
+          node --check extension/popup.js
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VideoNoteAI-macos
+          path: |
+            backend/dist/VideoNoteAI.app
+            backend/dist/VideoNoteAI.dmg
