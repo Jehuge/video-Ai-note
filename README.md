@@ -102,6 +102,8 @@ npm run dev
 - `backend/dist/VideoNoteAI/VideoNoteAI.exe`
 - `backend/dist/VideoNoteAI-win.zip`
 
+说明：Windows 完整包会包含 Python 运行库、ffmpeg、Playwright driver、ctranslate2、onnxruntime、numpy/av 等运行依赖，所以体积会比较大；发布包不包含 Whisper 模型权重或 HuggingFace 模型缓存，首次使用本地转写模型时仍会按 `faster-whisper` 的机制下载到用户数据目录。
+
 ### macOS
 
 ```bash
