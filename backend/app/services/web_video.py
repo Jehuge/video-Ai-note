@@ -1,0 +1,597 @@
+import os
+import re
+import shutil
+import threading
+import uuid
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
+
+from app.db.video_task_dao import create_task, get_task_by_id, update_task_status
+from app.services.model_settings import load_active_model_config
+from app.services.note import NoteGenerator
+from app.utils.ffmpeg_helper import get_ffmpeg_path
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "uploads"))
+NOTE_OUTPUT_DIR = Path(os.getenv("NOTE_OUTPUT_DIR", "note_results"))
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+NOTE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+MEDIA_EXTENSIONS = {".mp4", ".m4v", ".mov", ".webm", ".mkv", ".flv", ".avi", ".mp3", ".m4a", ".wav", ".ts", ".aac"}
+STREAM_EXTENSIONS = {".m3u8", ".mpd"}
+FRAGMENT_EXTENSIONS = {".m4s", ".ts"}
+DEFAULT_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/125.0.0.0 Safari/537.36"
+    ),
+}
+NOTE_STYLES = {"simple", "detailed", "academic", "creative"}
+TERMINAL_JOB_STATUSES = {"completed", "failed", "canceled", "cancelled"}
+TASK_STATUS_TO_JOB = {
+    "pending": ("imported", 92, "Waiting in AInote"),
+    "processing": ("running_note", 96, "Extracting audio"),
+    "transcribing": ("running_note", 97, "Transcribing audio"),
+    "transcribed": ("running_note", 98, "Waiting to summarize"),
+    "summarizing": ("running_note", 99, "Generating note"),
+}
+
+
+@dataclass
+class WebVideoJob:
+    job_id: str
+    status: str = "queued"
+    progress: int = 0
+    message: str = ""
+    error: Optional[str] = None
+    task_id: Optional[str] = None
+    filename: Optional[str] = None
+    page_url: Optional[str] = None
+
+
+@dataclass
+class WebVideoJobManager:
+    jobs: Dict[str, WebVideoJob] = field(default_factory=dict)
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def create(self, page_url: str) -> WebVideoJob:
+        job = WebVideoJob(job_id=str(uuid.uuid4()), page_url=page_url)
+        with self.lock:
+            self.jobs[job.job_id] = job
+        return job
+
+    def get(self, job_id: str) -> Optional[WebVideoJob]:
+        with self.lock:
+            return self.jobs.get(job_id)
+
+    def update(self, job_id: str, **updates) -> Optional[WebVideoJob]:
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if not job:
+                return None
+            if job.status in {"canceled", "cancelled"} and updates.get("status") not in {None, job.status}:
+                return job
+            for key, value in updates.items():
+                setattr(job, key, value)
+            return job
+
+    def find_by_task_id(self, task_id: str) -> List[WebVideoJob]:
+        with self.lock:
+            return [job for job in self.jobs.values() if job.task_id == task_id]
+
+
+job_manager = WebVideoJobManager()
+
+
+def cancel_jobs_for_task(task_id: str, message: str = "Canceled in AInote") -> List[WebVideoJob]:
+    canceled = []
+    for job in job_manager.find_by_task_id(task_id):
+        if job.status not in TERMINAL_JOB_STATUSES or job.status in {"running_note", "imported"}:
+            updated = job_manager.update(
+                job.job_id,
+                status="canceled",
+                progress=100,
+                message=message,
+                error=None,
+            )
+            if updated:
+                canceled.append(updated)
+    return canceled
+
+
+def sync_job_with_task(job_id: str) -> Optional[WebVideoJob]:
+    job = job_manager.get(job_id)
+    if not job or not job.task_id:
+        return job
+
+    if job.status in TERMINAL_JOB_STATUSES:
+        return job
+
+    task = get_task_by_id(job.task_id)
+    if not task:
+        return job_manager.update(
+            job_id,
+            status="canceled",
+            progress=100,
+            message="Canceled in AInote",
+            error=None,
+        )
+
+    task_status = getattr(task, "status", "")
+    if task_status == "failed":
+        return job_manager.update(
+            job_id,
+            status="failed",
+            progress=100,
+            message="AInote task failed",
+            error=getattr(task, "error_message", None) or "AInote task failed",
+        )
+    if task_status == "completed":
+        return job_manager.update(job_id, status="completed", progress=100, message="Done", error=None)
+
+    mapped = TASK_STATUS_TO_JOB.get(task_status)
+    if mapped:
+        status, progress, message = mapped
+        return job_manager.update(
+            job_id,
+            status=status,
+            progress=max(job.progress, progress),
+            message=message,
+            error=None,
+        )
+
+    return job
+
+
+def _safe_label(value: str, fallback: str = "web-video") -> str:
+    value = value or fallback
+    value = re.sub(r"[\\/:*?\"<>|]+", "_", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    return (value[:80] or fallback).strip(". ")
+
+
+def _stream_id(url: str) -> str:
+    return "stream-" + uuid.uuid5(uuid.NAMESPACE_URL, url).hex[:16]
+
+
+def _format_filesize(value: Optional[int]) -> Optional[int]:
+    try:
+        return int(value) if value else None
+    except Exception:
+        return None
+
+
+def _stream_label(stream: Dict[str, Any], index: int) -> str:
+    label = stream.get("label") or stream.get("quality")
+    height = stream.get("height")
+    if label:
+        return str(label)
+    if height:
+        return f"{height}p"
+    parsed = urlparse(stream.get("url", ""))
+    suffix = Path(parsed.path).suffix.lower().lstrip(".")
+    return suffix.upper() if suffix else f"Stream {index + 1}"
+
+
+def _stream_suffix(url: str) -> str:
+    parsed = urlparse(url)
+    return Path(parsed.path).suffix.lower()
+
+
+def _stream_mime(stream: Dict[str, Any]) -> str:
+    return (stream.get("mimeType") or stream.get("mime") or stream.get("type") or "").lower()
+
+
+def _is_manifest_stream(stream: Dict[str, Any]) -> bool:
+    url = (stream.get("url") or "").strip()
+    suffix = _stream_suffix(url)
+    mime = _stream_mime(stream)
+    return (
+        suffix in STREAM_EXTENSIONS
+        or "mpegurl" in mime
+        or "application/x-mpegurl" in mime
+        or "dash" in mime
+        or "mpd" in mime
+    )
+
+
+def _is_fragment_stream(stream: Dict[str, Any]) -> bool:
+    url = (stream.get("url") or "").strip()
+    suffix = _stream_suffix(url)
+    label = str(stream.get("label") or "").lower()
+    return bool(
+        stream.get("isFragment")
+        or stream.get("segment")
+        or (suffix == ".m4s")
+        or (suffix == ".ts" and "segment" in label)
+    )
+
+
+def _stream_protocol(stream: Dict[str, Any]) -> str:
+    suffix = _stream_suffix(stream.get("url") or "")
+    if suffix == ".m3u8" or "mpegurl" in _stream_mime(stream):
+        return "m3u8"
+    if suffix == ".mpd" or "dash" in _stream_mime(stream) or "mpd" in _stream_mime(stream):
+        return "dash"
+    return "direct"
+
+
+def _normalize_detected_streams(streams: List[Dict[str, Any]], page_title: str = "") -> List[Dict[str, Any]]:
+    normalized = []
+    seen = set()
+    for index, stream in enumerate(streams or []):
+        url = (stream.get("url") or "").strip()
+        if not url or url in seen:
+            continue
+        if url.startswith("blob:"):
+            continue
+        if _is_fragment_stream(stream):
+            continue
+        seen.add(url)
+
+        parsed = urlparse(url)
+        suffix = _stream_suffix(url)
+        if suffix and suffix not in MEDIA_EXTENSIONS and suffix not in STREAM_EXTENSIONS:
+            mime = _stream_mime(stream)
+            if "video" not in mime and "audio" not in mime and "mpegurl" not in mime and "dash" not in mime:
+                continue
+
+        ext = suffix.lstrip(".") if suffix else (stream.get("ext") or ("m3u8" if _is_manifest_stream(stream) else "mp4"))
+        protocol = _stream_protocol(stream)
+
+        label = _stream_label(stream, index)
+        normalized.append({
+            "id": _stream_id(url),
+            "title": page_title or parsed.netloc or "Detected video",
+            "sourceUrl": url,
+            "extractor": "browser-detected",
+            "formats": [{
+                "formatId": "detected",
+                "label": label,
+                "height": stream.get("height"),
+                "ext": ext,
+                "filesize": _format_filesize(stream.get("filesize") or stream.get("size")),
+                "protocol": protocol,
+            }],
+        })
+    return normalized
+
+
+def _format_label(fmt: Dict[str, Any]) -> str:
+    height = fmt.get("height")
+    ext = fmt.get("ext") or "media"
+    note = fmt.get("format_note") or fmt.get("resolution") or fmt.get("format")
+    if height:
+        return f"{height}p {ext}"
+    if note:
+        return str(note)[:80]
+    return str(fmt.get("format_id") or "best")
+
+
+def _download_format_id(fmt: Dict[str, Any]) -> str:
+    format_id = str(fmt.get("format_id") or "best")
+    if fmt.get("vcodec") not in {None, "none"} and fmt.get("acodec") == "none":
+        return f"{format_id}+ba/best"
+    return format_id
+
+
+def _yt_dlp_options(headers: Optional[Dict[str, str]] = None, cookie: Optional[str] = None,
+                    referer: Optional[str] = None) -> Dict[str, Any]:
+    http_headers = dict(DEFAULT_BROWSER_HEADERS)
+    for key, value in (headers or {}).items():
+        key_lower = key.lower()
+        if key_lower in {"authorization", "cookie", "set-cookie"}:
+            continue
+        if value:
+            http_headers[key] = value
+    if referer and not any(key.lower() == "referer" for key in http_headers):
+        http_headers["Referer"] = referer
+    if cookie:
+        http_headers["Cookie"] = cookie
+
+    options: Dict[str, Any] = {
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
+        "noplaylist": True,
+        "ignore_no_formats_error": True,
+        "socket_timeout": 15,
+        "fragment_retries": 3,
+        "retries": 3,
+        "http_headers": http_headers,
+    }
+
+    try:
+        ffmpeg_path = Path(get_ffmpeg_path())
+        options["ffmpeg_location"] = str(ffmpeg_path.parent)
+    except Exception:
+        pass
+
+    return options
+
+
+def _candidate_key(candidate: Dict[str, Any]) -> str:
+    formats = ",".join(sorted(str(fmt.get("formatId") or "") for fmt in candidate.get("formats") or []))
+    return f"{candidate.get('extractor') or ''}|{candidate.get('sourceUrl') or ''}|{formats}"
+
+
+def _dedupe_candidates(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    deduped = []
+    seen = set()
+    for candidate in candidates:
+        key = _candidate_key(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(candidate)
+    return deduped
+
+
+def _info_to_candidates(info: Dict[str, Any], page_title: str, source_url: str,
+                        candidate_prefix: str = "yt", max_items: int = 8) -> List[Dict[str, Any]]:
+    if not isinstance(info, dict):
+        return []
+
+    entries = info.get("entries")
+    info_items = [item for item in entries if isinstance(item, dict)] if entries else [info]
+    candidates = []
+
+    for item_index, item in enumerate(info_items[:max_items]):
+        formats = []
+        for fmt in item.get("formats") or []:
+            format_id = fmt.get("format_id")
+            if not format_id:
+                continue
+            protocol = fmt.get("protocol") or ""
+            if protocol == "mhtml":
+                continue
+            if fmt.get("vcodec") == "none":
+                continue
+            formats.append({
+                "formatId": _download_format_id(fmt),
+                "rawFormatId": str(format_id),
+                "label": _format_label(fmt),
+                "height": fmt.get("height"),
+                "ext": fmt.get("ext"),
+                "filesize": _format_filesize(fmt.get("filesize") or fmt.get("filesize_approx")),
+                "protocol": protocol,
+            })
+
+        if formats:
+            formats.sort(key=lambda f: (f.get("height") or 0, f.get("filesize") or 0), reverse=True)
+        else:
+            formats = [{
+                "formatId": "best",
+                "label": "Best available",
+                "height": None,
+                "ext": item.get("ext"),
+                "filesize": _format_filesize(item.get("filesize")),
+                "protocol": item.get("protocol"),
+            }]
+
+        resolved_source = (
+            item.get("webpage_url")
+            or item.get("original_url")
+            or item.get("url")
+            or source_url
+        )
+        candidates.append({
+            "id": f"{candidate_prefix}-{item_index}",
+            "title": item.get("title") or page_title or "Web video",
+            "sourceUrl": resolved_source,
+            "extractor": item.get("extractor") or "yt-dlp",
+            "duration": item.get("duration"),
+            "thumbnail": item.get("thumbnail"),
+            "formats": formats,
+        })
+
+    return candidates
+
+
+def _resolve_with_ytdlp(url: str, page_title: str = "", headers: Optional[Dict[str, str]] = None,
+                       cookie: Optional[str] = None, referer: Optional[str] = None,
+                       candidate_prefix: str = "yt") -> List[Dict[str, Any]]:
+    import yt_dlp
+
+    options = _yt_dlp_options(headers=headers, cookie=cookie, referer=referer)
+    with yt_dlp.YoutubeDL(options) as ydl:
+        info = ydl.extract_info(url, download=False)
+    return _info_to_candidates(info, page_title=page_title, source_url=url, candidate_prefix=candidate_prefix)
+
+
+def resolve_web_video(page_url: str, page_title: str = "", detected_streams: Optional[List[Dict[str, Any]]] = None,
+                      headers: Optional[Dict[str, str]] = None, cookie: Optional[str] = None) -> Dict[str, Any]:
+    candidates = []
+    errors = []
+
+    if page_url:
+        try:
+            candidates.extend(_resolve_with_ytdlp(
+                page_url,
+                page_title=page_title,
+                headers=headers,
+                cookie=cookie,
+                candidate_prefix="yt",
+            ))
+        except Exception as exc:
+            errors.append(f"page: {exc}")
+
+    fallback_streams = []
+    seen_stream_urls = set()
+    for stream in detected_streams or []:
+        url = (stream.get("url") or "").strip()
+        if not url or url.startswith("blob:") or _is_fragment_stream(stream):
+            continue
+        if url in seen_stream_urls:
+            continue
+        seen_stream_urls.add(url)
+
+        if _is_manifest_stream(stream):
+            try:
+                stream_prefix = _stream_id(url)
+                resolved = _resolve_with_ytdlp(
+                    url,
+                    page_title=page_title,
+                    headers=headers,
+                    cookie=cookie,
+                    referer=page_url,
+                    candidate_prefix=stream_prefix,
+                )
+                if resolved:
+                    candidates.extend(resolved)
+                    continue
+            except Exception as exc:
+                errors.append(f"stream {url}: {exc}")
+
+        fallback_streams.append(stream)
+
+    candidates.extend(_normalize_detected_streams(fallback_streams, page_title=page_title))
+    candidates = _dedupe_candidates(candidates)
+
+    return {
+        "pageUrl": page_url,
+        "pageTitle": page_title,
+        "candidates": candidates,
+        "errors": errors,
+    }
+
+
+def start_import_job(payload: Dict[str, Any]) -> WebVideoJob:
+    page_url = payload.get("pageUrl") or payload.get("page_url") or ""
+    job = job_manager.create(page_url=page_url)
+    thread = threading.Thread(target=_run_import_job, args=(job.job_id, payload), daemon=True)
+    thread.start()
+    return job
+
+
+def _choose_download_url(payload: Dict[str, Any]) -> str:
+    candidate_url = payload.get("candidateUrl") or payload.get("candidate_url")
+    if candidate_url and not str(candidate_url).startswith("blob:"):
+        return candidate_url
+    candidate_id = payload.get("candidateId") or payload.get("candidate_id")
+    for candidate in _normalize_detected_streams(payload.get("detectedStreams") or [], payload.get("pageTitle") or ""):
+        if candidate["id"] == candidate_id:
+            return candidate["sourceUrl"]
+    return payload.get("pageUrl") or payload.get("page_url") or ""
+
+
+def _download_with_ytdlp(job_id: str, payload: Dict[str, Any]) -> Path:
+    import yt_dlp
+
+    url = _choose_download_url(payload)
+    if not url:
+        raise ValueError("No video URL was provided")
+
+    job_prefix = f"web_{job_id}"
+    outtmpl = str(UPLOAD_DIR / f"{job_prefix}.%(ext)s")
+    format_id = payload.get("formatId") or payload.get("format_id") or "bv*+ba/best"
+    if format_id == "detected":
+        format_id = "best"
+    cookie = payload.get("cookie") or payload.get("cookies")
+    headers = payload.get("headers") or {}
+
+    def progress_hook(status: Dict[str, Any]):
+        if status.get("status") == "downloading":
+            total = status.get("total_bytes") or status.get("total_bytes_estimate") or 0
+            downloaded = status.get("downloaded_bytes") or 0
+            progress = int(downloaded * 80 / total) if total else 10
+            job_manager.update(job_id, status="downloading", progress=max(5, min(progress, 85)), message="Downloading video")
+        elif status.get("status") == "finished":
+            job_manager.update(job_id, status="downloading", progress=90, message="Finalizing media")
+
+    options = _yt_dlp_options(headers=headers, cookie=cookie, referer=payload.get("pageUrl") or payload.get("page_url"))
+    options.update({
+        "outtmpl": outtmpl,
+        "format": format_id,
+        "merge_output_format": "mp4",
+        "progress_hooks": [progress_hook],
+        "restrictfilenames": False,
+    })
+
+    job_manager.update(job_id, status="downloading", progress=5, message="Resolving selected media")
+    with yt_dlp.YoutubeDL(options) as ydl:
+        ydl.download([url])
+
+    matches = sorted(UPLOAD_DIR.glob(f"{job_prefix}.*"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not matches:
+        raise FileNotFoundError("Download completed but no output file was found")
+    return matches[0]
+
+
+def _task_filename(payload: Dict[str, Any], downloaded_path: Path) -> str:
+    title = payload.get("pageTitle") or downloaded_path.stem or "web-video"
+    suffix = downloaded_path.suffix.lower() or ".mp4"
+    if suffix not in MEDIA_EXTENSIONS:
+        suffix = ".mp4"
+    return f"{_safe_label(title)}{suffix}"
+
+
+def _write_model_config(task_id: str, model_config: Optional[dict]) -> None:
+    if not model_config:
+        return
+    config_file = NOTE_OUTPUT_DIR / f"{task_id}_model_config.json"
+    import json
+    config_file.write_text(json.dumps(model_config, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _payload_note_style(payload: Dict[str, Any], default: str = "simple") -> str:
+    style = payload.get("noteStyle") or payload.get("note_style") or default
+    return style if style in NOTE_STYLES else default
+
+
+def _run_import_job(job_id: str, payload: Dict[str, Any]) -> None:
+    downloaded_path: Optional[Path] = None
+    try:
+        downloaded_path = _download_with_ytdlp(job_id, payload)
+        job_manager.update(job_id, status="imported", progress=92, message="Creating AInote task")
+
+        task_id = str(uuid.uuid4())
+        filename = _task_filename(payload, downloaded_path)
+        target_path = UPLOAD_DIR / f"{task_id}{Path(filename).suffix.lower()}"
+        shutil.move(str(downloaded_path), target_path)
+
+        screenshot = bool(payload.get("screenshot", False))
+        create_task(
+            task_id=task_id,
+            filename=filename,
+            screenshot=screenshot,
+            source="web",
+            source_url=payload.get("pageUrl") or payload.get("page_url"),
+        )
+
+        model_config = load_active_model_config() or {}
+        note_style = _payload_note_style(payload, model_config.get("note_style", "simple"))
+        model_config["note_style"] = note_style
+        _write_model_config(task_id, model_config)
+        job_manager.update(job_id, task_id=task_id, filename=filename, progress=95)
+
+        if payload.get("autoRun", payload.get("auto_run", True)):
+            job_manager.update(job_id, status="running_note", progress=96, message="Generating note")
+            NoteGenerator(model_config=model_config).generate(
+                video_path=str(target_path),
+                filename=filename,
+                task_id=task_id,
+                screenshot=screenshot,
+                note_style=note_style,
+            )
+
+        job_manager.update(job_id, status="completed", progress=100, message="Done")
+    except Exception as exc:
+        logger.error(f"Web video import job failed: {exc}", exc_info=True)
+        current = job_manager.get(job_id)
+        if current and current.task_id:
+            try:
+                update_task_status(current.task_id, "failed", error_message=str(exc))
+            except Exception:
+                pass
+        job_manager.update(job_id, status="failed", error=str(exc), message="Import failed")
+        if downloaded_path and downloaded_path.exists():
+            try:
+                downloaded_path.unlink()
+            except Exception:
+                pass

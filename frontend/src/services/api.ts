@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { getSelectedModelConfig } from '../utils/modelConfig'
 
 // 使用相对路径，通过 Vite 代理访问后端
 // 开发环境：通过 vite.config.ts 中的 proxy 配置代理到 http://localhost:8483
@@ -16,9 +17,11 @@ export const uploadVideo = async (
   screenshot: boolean = false,
   modelConfig: {
     provider: string
+    provider_type?: string
     api_key: string
     base_url?: string
     model: string
+    note_style?: string
   } | null = null,
   noteStyle: string = 'simple',
   onProgress?: (progress: number) => void
@@ -69,35 +72,7 @@ export const confirmStep = async (taskId: string, step: string) => {
 
 // 重新生成笔记
 export const regenerateNote = async (taskId: string, noteStyle?: string) => {
-  // 获取当前选择的模型配置
-  const selectedModelId = localStorage.getItem('selectedModel')
-  const modelConfigs = localStorage.getItem('modelConfigs')
-
-  let modelConfig = null
-  if (selectedModelId && modelConfigs) {
-    try {
-      const configs = JSON.parse(modelConfigs)
-      // 从 selectedModelId 中提取 provider 和 modelId
-      const firstDashIndex = selectedModelId.indexOf('-')
-      if (firstDashIndex > 0) {
-        const provider = selectedModelId.substring(0, firstDashIndex)
-        const modelId = selectedModelId.substring(firstDashIndex + 1)
-        const providerConfig = configs[provider]
-
-        if (providerConfig) {
-          modelConfig = {
-            provider,
-            api_key: providerConfig.apiKey || '',
-            base_url: providerConfig.baseUrl || '',
-            model: modelId,
-          }
-          console.log('重新生成时使用的模型配置:', modelConfig)
-        }
-      }
-    } catch (e) {
-      console.error('解析模型配置失败:', e)
-    }
-  }
+  const modelConfig = getSelectedModelConfig(noteStyle || 'simple')
 
   // 将模型配置作为请求体传递（使用驼峰命名）
   return await api.post(`/task/${taskId}/regenerate`, {
@@ -124,6 +99,39 @@ export const testModelConnection = async (config: {
   base_url?: string
 }) => {
   return await api.post('/models/test', config)
+}
+
+export const setActiveModelConfig = async (config: {
+  provider: string
+  provider_type?: string
+  api_key: string
+  base_url?: string
+  model: string
+  note_style?: string
+}) => {
+  return await api.post('/models/active', config)
+}
+
+export const getTranscriberConfig = async () => {
+  return await api.get('/transcriber/config')
+}
+
+export const saveTranscriberConfig = async (config: {
+  type: string
+  model_size?: string
+  device?: string
+  compute_type?: string
+}) => {
+  return await api.post('/transcriber/config', config)
+}
+
+export const testTranscriberConfig = async (config: {
+  type: string
+  model_size?: string
+  device?: string
+  compute_type?: string
+}) => {
+  return await api.post('/transcriber/test', config)
 }
 
 // 获取提供商列表
@@ -155,9 +163,11 @@ export const createTaskFromFile = async (
   screenshot: boolean = false,
   modelConfig: {
     provider: string
+    provider_type?: string
     api_key: string
     base_url?: string
     model: string
+    note_style?: string
   } | null = null,
   noteStyle: string = 'simple'
 ) => {

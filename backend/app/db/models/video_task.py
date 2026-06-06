@@ -10,8 +10,11 @@ class VideoTask(Base):
     task_id = Column(String, unique=True, nullable=False, index=True)
     filename = Column(String, nullable=False)
     status = Column(String, nullable=False, default="pending")
+    error_message = Column(String, nullable=True)
     markdown = Column(String, nullable=True)
     screenshot = Column(Integer, default=0)  # 0=False, 1=True
+    source = Column(String, nullable=False, default="upload")
+    source_url = Column(String, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 

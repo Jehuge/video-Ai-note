@@ -6,7 +6,13 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-def create_task(task_id: str, filename: str, screenshot: bool = False) -> VideoTask:
+def create_task(
+    task_id: str,
+    filename: str,
+    screenshot: bool = False,
+    source: str = "upload",
+    source_url: str = None
+) -> VideoTask:
     """创建新任务"""
     db = SessionLocal()
     try:
@@ -14,7 +20,9 @@ def create_task(task_id: str, filename: str, screenshot: bool = False) -> VideoT
             task_id=task_id,
             filename=filename,
             status="pending",
-            screenshot=1 if screenshot else 0
+            screenshot=1 if screenshot else 0,
+            source=source,
+            source_url=source_url,
         )
         db.add(task)
         db.commit()
@@ -41,7 +49,7 @@ def get_task_by_id(task_id: str) -> VideoTask:
         db.close()
 
 
-def update_task_status(task_id: str, status: str, markdown: str = None):
+def update_task_status(task_id: str, status: str, markdown: str = None, error_message: str = None):
     """更新任务状态"""
     db = SessionLocal()
     try:
@@ -50,6 +58,10 @@ def update_task_status(task_id: str, status: str, markdown: str = None):
             task.status = status
             if markdown:
                 task.markdown = markdown
+            if status == "failed" and error_message:
+                task.error_message = error_message
+            elif status != "failed":
+                task.error_message = None
             db.commit()
             db.refresh(task)
             return task

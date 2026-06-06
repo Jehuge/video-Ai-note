@@ -5,6 +5,7 @@ import { uploadVideo } from '../services/api'
 import toast from 'react-hot-toast'
 import FileConfirmDialog from './FileConfirmDialog'
 import VideoLibrary from './VideoLibrary'
+import { getSelectedModelConfig } from '../utils/modelConfig'
 
 interface UploadZoneProps {
     onUploadSuccess?: (taskId: string) => void
@@ -72,32 +73,7 @@ export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
         const noteStyle = 'simple'
         if (!selectedFile) return
 
-        // 获取模型配置 logic
-        const selectedModelId = localStorage.getItem('selectedModel')
-        const modelConfigs = localStorage.getItem('modelConfigs')
-        let modelConfig = null
-
-        if (selectedModelId && modelConfigs) {
-            try {
-                const configs = JSON.parse(modelConfigs)
-                const firstDashIndex = selectedModelId.indexOf('-')
-                if (firstDashIndex > 0) {
-                    const provider = selectedModelId.substring(0, firstDashIndex)
-                    const modelId = selectedModelId.substring(firstDashIndex + 1)
-                    const providerConfig = configs[provider]
-                    if (providerConfig) {
-                        modelConfig = {
-                            provider,
-                            api_key: providerConfig.apiKey || '',
-                            base_url: providerConfig.baseUrl || '',
-                            model: modelId,
-                        }
-                    }
-                }
-            } catch (e) {
-                console.error('解析模型配置失败:', e)
-            }
-        }
+        const modelConfig = getSelectedModelConfig(noteStyle)
 
         setShowConfirm(false)
         setUploading(true)

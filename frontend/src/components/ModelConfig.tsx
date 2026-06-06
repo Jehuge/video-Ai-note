@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
-import { Save, Eye, EyeOff, Key, Brain, CheckCircle2, RefreshCw, Loader2, Plus, Trash2, Edit2 } from 'lucide-react'
+import { Save, Eye, EyeOff, Key, Brain, RefreshCw, Loader2, Plus, Trash2, Edit2 } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { getModelList, testModelConnection, getProviders } from '../services/api'
+import { getModelList, testModelConnection, getProviders, setActiveModelConfig } from '../services/api'
 import ModelSelectorPanel from './ModelSelectorPanel'
 import ProviderIcon from './ProviderIcon'
 import { v4 as uuidv4 } from 'uuid'
@@ -38,6 +38,7 @@ interface ModelItem {
   name: string
   provider: string      // 实例ID
   providerType?: string // 类型
+  source?: 'remote' | 'manual'
 }
 
 export default function ModelConfig() {
@@ -48,6 +49,7 @@ export default function ModelConfig() {
   const [saving, setSaving] = useState(false)
   const [loadingModels, setLoadingModels] = useState(false)
   const [availableModels, setAvailableModels] = useState<ModelItem[]>([])
+  const [manualModelId, setManualModelId] = useState('')
 
   // 防止重复加载
   const initializedRef = useRef(false)
@@ -238,8 +240,20 @@ export default function ModelConfig() {
 
       // 保存到 localStorage (整体保存)
       localStorage.setItem('modelConfigs', JSON.stringify(instances))
+      const selectedModelId = `${currentInstance.id}:${currentInstance.models[0]}`
+      localStorage.setItem('selectedModel', selectedModelId)
+
+      await setActiveModelConfig({
+        provider: currentInstance.id,
+        provider_type: currentInstance.providerType,
+        api_key: currentInstance.apiKey,
+        base_url: currentInstance.baseUrl,
+        model: currentInstance.models[0],
+        note_style: 'simple',
+      })
 
       toast.success(`保存成功！已选择 ${currentInstance.models.length} 个模型`)
+      window.dispatchEvent(new Event('modelChanged'))
 
       // 刷新模型列表显示（如果需要）
       loadModels()
@@ -268,7 +282,10 @@ export default function ModelConfig() {
       })
 
       if (response.data.code === 200) {
-        const models = response.data.data || []
+        const models = (response.data.data || []).map((item: ModelItem) => ({
+          ...item,
+          source: 'remote' as const,
+        }))
         setAvailableModels(models)
 
         const cacheKey = `${currentInstance.providerType}-${currentInstance.apiKey}-${currentInstance.baseUrl}`
@@ -276,12 +293,14 @@ export default function ModelConfig() {
           models,
           timestamp: Date.now()
         }
-        toast.success(`获取到 ${models.length} 个模型`)
+        toast.success(`真实获取到 ${models.length} 个模型`)
       } else {
+        setAvailableModels([])
         toast.error(response.data.msg || "获取模型列表失败")
       }
     } catch (e: any) {
       console.error(e)
+      setAvailableModels([])
       toast.error("获取模型列表失败: " + (e.response?.data?.msg || e.message))
     } finally {
       setLoadingModels(false)
@@ -324,6 +343,36 @@ export default function ModelConfig() {
       : [...currentModels, modelId]
 
     handleUpdateInstance('models', newModels)
+  }
+
+  const addManualModel = () => {
+    if (!currentInstance) return
+    const modelId = manualModelId.trim()
+    if (!modelId) {
+      toast.error('请输入模型 ID')
+      return
+    }
+
+    const existingModels = currentInstance.models || []
+    if (!existingModels.includes(modelId)) {
+      handleUpdateInstance('models', [...existingModels, modelId])
+    }
+
+    if (!availableModels.some((model) => model.id === modelId)) {
+      setAvailableModels((prev) => [
+        ...prev,
+        {
+          id: modelId,
+          name: modelId,
+          provider: currentInstance.id,
+          providerType: currentInstance.providerType,
+          source: 'manual',
+        },
+      ])
+    }
+
+    setManualModelId('')
+    toast.success('已添加手动模型')
   }
 
   return (
@@ -508,6 +557,11 @@ export default function ModelConfig() {
                                 onChange={() => handleModelToggle(model.id)}
                               />
                               <span className="text-sm text-gray-700 truncate select-none" title={model.id}>{model.name}</span>
+                              {model.source === 'manual' && (
+                                <span className="ml-auto text-[10px] text-amber-700 bg-amber-50 border border-amber-100 px-1.5 py-0.5 rounded shrink-0">
+                                  手动
+                                </span>
+                              )}
                             </label>
                           )
                         })}
@@ -515,9 +569,31 @@ export default function ModelConfig() {
                     ) : (
                       <div className="flex flex-col items-center justify-center py-8 border-2 border-dashed border-gray-200 rounded-xl bg-gray-50/50 text-gray-400 text-sm">
                         <Brain className="w-8 h-8 mb-2 opacity-50" />
-                        {loadingModels ? '正在加载模型...' : '点击"刷新模型列表"加载可用模型'}
+                        {loadingModels ? '正在加载模型...' : '点击"刷新模型列表"加载接口真实返回的模型，或在下方手动添加模型 ID'}
                       </div>
                     )}
+
+                    <div className="mt-3 flex flex-col sm:flex-row gap-2">
+                      <input
+                        type="text"
+                        value={manualModelId}
+                        onChange={(e) => setManualModelId(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault()
+                            addManualModel()
+                          }
+                        }}
+                        placeholder="手动输入模型 ID，如 gpt-4o-mini、deepseek-chat、qwen-plus"
+                        className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono"
+                      />
+                      <button
+                        onClick={addManualModel}
+                        className="px-4 py-2 text-sm font-medium bg-white text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors"
+                      >
+                        添加模型
+                      </button>
+                    </div>
                   </div>
 
                   {/* 操作栏 */}

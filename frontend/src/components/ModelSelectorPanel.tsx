@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Brain, ChevronDown, CheckCircle2 } from 'lucide-react'
 import ProviderIcon from './ProviderIcon'
 import toast from 'react-hot-toast'
+import { setActiveModelConfig } from '../services/api'
 
 interface ModelOption {
   id: string
@@ -197,12 +198,29 @@ export default function ModelSelectorPanel() {
 
   const currentModel = availableModels.find(m => m.id === selectedModel)
 
-  const handleModelChange = (id: string) => {
+  const handleModelChange = async (id: string) => {
     setSelectedModel(id)
     localStorage.setItem('selectedModel', id)
     setIsOpen(false)
     const model = availableModels.find(m => m.id === id)
     if (model) {
+      try {
+        const savedConfigs = localStorage.getItem('modelConfigs')
+        const instances: ProviderInstance[] = savedConfigs ? JSON.parse(savedConfigs) : []
+        const instance = instances.find(item => item.id === model.provider)
+        if (instance) {
+          await setActiveModelConfig({
+            provider: instance.id,
+            provider_type: instance.providerType,
+            api_key: instance.apiKey,
+            base_url: instance.baseUrl,
+            model: model.modelId,
+            note_style: 'simple',
+          })
+        }
+      } catch (error) {
+        console.warn('Failed to sync active model config:', error)
+      }
       toast.success(`已切换到: ${model.providerName} - ${model.name}`)
       // 触发自定义事件
       window.dispatchEvent(new Event('modelChanged'))

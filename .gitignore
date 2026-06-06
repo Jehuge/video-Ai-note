@@ -1,4 +1,4 @@
-# 环境变量和敏感信息
+# Environment variables and secrets
 .env
 .env.local
 .env.*.local
@@ -6,15 +6,15 @@
 *.pem
 *.p12
 
-# 数据库文件
+# Databases and runtime data
 *.db
 *.sqlite
 *.sqlite3
-
-# 上传文件和输出结果
 uploads/
 note_results/
 static/
+.e2e/
+tmp_e2e/
 
 # Python
 __pycache__/
@@ -25,7 +25,7 @@ __pycache__/
 env/
 venv/
 ENV/
-.venv
+.venv/
 
 # Node
 node_modules/
@@ -43,25 +43,25 @@ dist-ssr/
 *.njsproj
 *.sln
 
-# 系统文件
+# System files
 .DS_Store
 Thumbs.db
 
-# 日志
+# Logs
 *.log
 logs/
 
-# 打包和发布
+# Build and release outputs
 release/
 backend/build/
 backend/dist/
 
-# 二进制和安装包
+# Binary installers and archives
 *.app
 *.dmg
 *.pkg
 *.exe
 *.zip
 
-# ffmpeg
+# ffmpeg bundle
 ffmpeg_bin/

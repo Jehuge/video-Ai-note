@@ -25,7 +25,8 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
     if (!task) return
 
     // 检查转录是否完成（通过 transcript 状态判断）
-    const isTranscribeCompleted = transcript && transcript.segments && transcript.segments.length > 0
+    const transcriptSegmentCount = transcript?.segments?.length || 0
+    const isTranscribeCompleted = task.status === 'transcribed' || transcriptSegmentCount > 0
 
     const initialSteps = [
       {
@@ -46,7 +47,7 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
         description: '从视频文件中提取音频（如果是视频）',
         status: (task.status === 'pending'
           ? 'waiting_confirm'
-          : ['processing', 'transcribing', 'summarizing', 'completed'].includes(task.status)
+          : ['processing', 'transcribing', 'transcribed', 'summarizing', 'completed'].includes(task.status)
             ? 'completed'
             : 'pending') as StepStatus,
         canConfirm: task.status === 'pending',
@@ -61,7 +62,7 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
       {
         id: 'transcribe',
         name: '音频转写',
-        description: '使用 AI 将音频转换为文字',
+        description: '使用本地 faster-whisper 将音频转换为文字',
         status: (isTranscribeCompleted
           ? 'completed'
           : task.status === 'transcribing'
@@ -74,7 +75,7 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
         result: isTranscribeCompleted ? (
           <div className="text-sm text-green-600">
             <FileText className="w-4 h-4 inline mr-2" />
-            转写完成，共 {transcript.segments.length} 条片段
+            转写完成，共 {transcriptSegmentCount} 条片段
           </div>
         ) : null,
       },
@@ -86,7 +87,7 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
           ? task.status === 'summarizing'
             ? 'processing'
             : 'completed'
-          : isTranscribeCompleted || task.status === 'transcribing'
+          : isTranscribeCompleted || task.status === 'transcribing' || task.status === 'transcribed'
             ? 'waiting_confirm'
             : 'pending') as StepStatus,
         canConfirm: isTranscribeCompleted, // 只有转录完成后才能生成笔记
@@ -127,6 +128,7 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
           updateTaskRef.current(taskId, {
             status: taskData.status,
             markdown: taskData.markdown || currentTask?.markdown || '',
+            errorMessage: taskData.error_message || '',
           })
 
           // 更新转写结果
@@ -155,7 +157,7 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
 
     const task = tasks.find((t) => t.id === taskId)
     // 如果任务已完成且不需要自动处理，直接返回，不启动轮询
-    if (!task || (task.status === 'completed' && !autoProcess) || task.status === 'failed') {
+    if (!task || (['completed', 'transcribed'].includes(task.status) && !autoProcess) || task.status === 'failed') {
       return
     }
 
@@ -169,6 +171,7 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
           updateTaskRef.current(taskId, {
             status: taskData.status,
             markdown: taskData.markdown || currentTask?.markdown || '',
+            errorMessage: taskData.error_message || '',
           })
 
           // 更新转写结果
@@ -180,7 +183,7 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
           updateStepsStatus(taskData.status, taskData)
 
           // 如果任务已完成或失败，停止轮询
-          if (taskData.status === 'completed' || taskData.status === 'failed') {
+          if (taskData.status === 'completed' || taskData.status === 'failed' || taskData.status === 'transcribed') {
             clearInterval(interval)
             setAutoProcess(false)
           }
@@ -196,6 +199,13 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
   const updateStepsStatus = (status: string, taskData: any) => {
     setSteps((prev) =>
       prev.map((step) => {
+        if (status === 'failed') {
+          if (step.status === 'processing' || step.status === 'waiting_confirm') {
+            return { ...step, status: 'failed' as StepStatus }
+          }
+          return step
+        }
+
         // 检查转录步骤：如果有 transcript 数据，即使状态是 transcribing，也标记为完成
         if (step.id === 'transcribe') {
           if (taskData.transcript && taskData.transcript.segments) {
@@ -213,6 +223,8 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
           } else if (status === 'transcribing') {
             // 正在转录中
             return { ...step, status: 'processing' as StepStatus }
+          } else if (status === 'transcribed') {
+            return { ...step, status: 'completed' as StepStatus }
           }
         }
 
@@ -238,6 +250,10 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
         // 生成笔记步骤
         if (status === 'summarizing' && step.id === 'summarize') {
           return { ...step, status: 'processing' as StepStatus }
+        }
+
+        if (status === 'transcribed' && step.id === 'summarize') {
+          return { ...step, status: 'waiting_confirm' as StepStatus }
         }
 
         // 所有步骤完成
@@ -308,6 +324,9 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
           <div>
             <h2 className="text-xl font-semibold">{task.filename}</h2>
             <p className="text-sm text-gray-500 mt-1">任务 ID: {task.id}</p>
+            {task.status === 'failed' && task.errorMessage && (
+              <p className="text-sm text-red-600 mt-2 max-w-3xl">{task.errorMessage}</p>
+            )}
           </div>
           <button
             onClick={onClose}

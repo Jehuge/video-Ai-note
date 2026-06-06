@@ -1,7 +1,7 @@
 import os
-from openai import OpenAI
 from app.gpt.base import GPT
 from app.models.transcriber_model import TranscriptResult
+from app.services.openai_client import create_openai_client
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -25,9 +25,10 @@ class OpenAIGPT(GPT):
         if not self.api_key:
             raise ValueError("OPENAI_API_KEY 未设置")
         
-        self.client = OpenAI(
+        self.client = create_openai_client(
             api_key=self.api_key,
-            base_url=self.base_url
+            base_url=self.base_url,
+            timeout=120.0,
         )
         
         logger.info(f"初始化 OpenAI GPT: model={self.model}")

@@ -10,6 +10,7 @@ const statusIcons = {
   pending: <Clock className="w-4 h-4 text-amber-500" />,
   processing: <Loader2 className="w-4 h-4 animate-spin text-blue-500" />,
   transcribing: <Loader2 className="w-4 h-4 animate-spin text-blue-500" />,
+  transcribed: <CheckCircle2 className="w-4 h-4 text-emerald-500" />,
   summarizing: <Loader2 className="w-4 h-4 animate-spin text-blue-500" />,
 }
 
@@ -36,6 +37,9 @@ export default function TaskList() {
             id: task.task_id,
             filename: task.filename,
             status: task.status,
+            errorMessage: task.error_message,
+            source: task.source,
+            sourceUrl: task.source_url,
             markdown: task.markdown,
             createdAt: task.created_at,
           }))
@@ -138,7 +142,7 @@ export default function TaskList() {
                     <div className="flex items-center gap-3">
                       <div className={`
                       inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-medium border
-                      ${task.status === 'completed' ? 'bg-green-50 text-green-700 border-green-100' :
+                      ${task.status === 'completed' || task.status === 'transcribed' ? 'bg-green-50 text-green-700 border-green-100' :
                           task.status === 'failed' ? 'bg-red-50 text-red-700 border-red-100' :
                             'bg-blue-50 text-blue-700 border-blue-100'}
                     `}>
@@ -149,7 +153,8 @@ export default function TaskList() {
                               task.status === 'pending' ? '等待处理' :
                                 task.status === 'processing' ? '处理中...' :
                                   task.status === 'transcribing' ? '转写中...' :
-                                    task.status === 'summarizing' ? '生成中...' : task.status
+                                    task.status === 'transcribed' ? '转写完成' :
+                                      task.status === 'summarizing' ? '生成中...' : task.status
                         }</span>
                       </div>
 
@@ -160,6 +165,12 @@ export default function TaskList() {
                         </div>
                       )}
                     </div>
+
+                    {task.status === 'failed' && task.errorMessage && (
+                      <p className="mt-2 text-xs text-red-600 line-clamp-2" title={task.errorMessage}>
+                        {task.errorMessage}
+                      </p>
+                    )}
                   </div>
 
                   <button

@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "AInote Video Bridge",
+  "description": "Detect videos on the current page and send them to the local Video Note AI app.",
+  "version": "1.1.0",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "AInote Video Bridge"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "permissions": [
+    "activeTab",
+    "cookies",
+    "storage",
+    "scripting",
+    "tabs",
+    "webRequest"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "http://127.0.0.1:8483/*",
+    "http://localhost:8483/*"
+  ]
+}

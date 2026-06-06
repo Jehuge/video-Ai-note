@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from app.db.video_task_dao import create_task, get_task_by_id, get_all_tasks, update_task_status, delete_task_by_id
 from app.services.note import NoteGenerator
+from app.services.web_video import cancel_jobs_for_task
 from app.utils.response import ResponseWrapper as R
 from app.utils.logger import get_logger
 
@@ -60,8 +61,7 @@ def run_note_task_step(task_id: str, video_path: str, filename: str, step: str, 
                 generator._extract_audio(video_path, task_id),
                 task_id
             )
-            # 转录完成后，状态改为 "transcribed" 表示等待下一步确认
-            # 但为了兼容前端，我们保持 "transcribing" 状态，前端会通过检查 transcript 文件来判断是否完成
+            update_task_status(task_id, "transcribed")
             logger.info(f"转写完成: {task_id}")
             
         elif step == "summarize":
@@ -69,7 +69,7 @@ def run_note_task_step(task_id: str, video_path: str, filename: str, step: str, 
             transcript_file = NOTE_OUTPUT_DIR / f"{task_id}_transcript.json"
             if not transcript_file.exists():
                 logger.error(f"转录文件不存在: {task_id}")
-                update_task_status(task_id, "failed")
+                update_task_status(task_id, "failed", error_message="转录文件不存在，请先重新执行音频转写")
                 return
             
             # 如果启用了截图，删除缓存强制重新生成（确保包含截图标记）
@@ -102,7 +102,7 @@ def run_note_task_step(task_id: str, video_path: str, filename: str, step: str, 
             
     except Exception as e:
         logger.error(f"步骤执行失败: {task_id}, step={step}, 错误: {e}", exc_info=True)
-        update_task_status(task_id, "failed")
+        update_task_status(task_id, "failed", error_message=str(e))
 
 
 @router.post("/upload")
@@ -215,6 +215,9 @@ def get_task(task_id: str):
             "task_id": task.task_id,
             "filename": task.filename,
             "status": task.status,
+            "error_message": getattr(task, "error_message", None),
+            "source": getattr(task, "source", "upload"),
+            "source_url": getattr(task, "source_url", None),
             "created_at": task.created_at.isoformat() if task.created_at else None,
             "updated_at": task.updated_at.isoformat() if task.updated_at else None,
         }
@@ -248,6 +251,9 @@ def list_tasks(limit: int = 50):
                 "task_id": task.task_id,
                 "filename": task.filename,
                 "status": task.status,
+                "error_message": getattr(task, "error_message", None),
+                "source": getattr(task, "source", "upload"),
+                "source_url": getattr(task, "source_url", None),
                 "created_at": task.created_at.isoformat() if task.created_at else None,
             }
             for task in tasks
@@ -398,7 +404,7 @@ def confirm_step(task_id: str, request: ConfirmStepRequest, background_tasks: Ba
         elif step == "summarize":
             # 检查转录是否完成（通过检查转录文件是否存在）
             transcript_file = NOTE_OUTPUT_DIR / f"{task_id}_transcript.json"
-            if task.status != "transcribing" and not transcript_file.exists():
+            if task.status not in {"transcribing", "transcribed"} and not transcript_file.exists():
                 return R.error("请先完成音频转写")
             background_tasks.add_task(
                 run_note_task_step,
@@ -659,6 +665,7 @@ def delete_task(task_id: str):
             return R.error("任务不存在")
         
         # 删除数据库记录
+        cancel_jobs_for_task(task_id)
         delete_task_by_id(task_id)
         
         # 删除相关文件

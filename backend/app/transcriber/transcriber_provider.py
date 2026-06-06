@@ -1,33 +1,27 @@
 import os
+
+from app.services.transcriber_settings import load_transcriber_config, normalize_transcriber_config
 from app.transcriber.base import Transcriber
 from app.transcriber.fast_whisper import FastWhisperTranscriber
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# 支持的转录器类型
-_transcribers = {
-    "fast-whisper": FastWhisperTranscriber,
-}
 
+def get_transcriber(transcriber_type: str = None, config: dict = None) -> Transcriber:
+    """Build the local speech recognizer.
 
-def get_transcriber(transcriber_type: str = "fast-whisper") -> Transcriber:
+    Speech recognition is intentionally local. LLM provider APIs are used only
+    later, when the transcript is summarized into notes.
     """
-    获取转录器实例
-    
-    :param transcriber_type: 转录器类型
-    :return: Transcriber 实例
-    """
-    if transcriber_type not in _transcribers:
-        raise ValueError(f"不支持的转录器类型: {transcriber_type}")
-    
-    transcriber_cls = _transcribers[transcriber_type]
-    
-    # 根据类型初始化
-    if transcriber_type == "fast-whisper":
-        model_size = os.getenv("WHISPER_MODEL_SIZE", "base")
-        device = os.getenv("WHISPER_DEVICE", "cpu")
-        return transcriber_cls(model_size=model_size, device=device)
-    
-    return transcriber_cls()
+    loaded_config = normalize_transcriber_config(config) if config else load_transcriber_config()
 
+    requested_type = transcriber_type or loaded_config.get("type") or os.getenv("TRANSCRIBER_TYPE", "fast-whisper")
+    if requested_type != "fast-whisper":
+        logger.warning("Ignoring remote transcriber type %s; using local faster-whisper", requested_type)
+
+    return FastWhisperTranscriber(
+        model_size=loaded_config.get("model_size") or os.getenv("WHISPER_MODEL_SIZE", "base"),
+        device=loaded_config.get("device") or os.getenv("WHISPER_DEVICE", "cpu"),
+        compute_type=loaded_config.get("compute_type") or None,
+    )

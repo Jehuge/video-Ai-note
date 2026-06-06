@@ -4,6 +4,7 @@ import { getVideoFiles, createTaskFromFile } from '../services/api'
 import { useTaskStore } from '../store/taskStore'
 import toast from 'react-hot-toast'
 import FileConfirmDialog from './FileConfirmDialog'
+import { getSelectedModelConfig } from '../utils/modelConfig'
 
 interface VideoFile {
     filename: string
@@ -61,32 +62,7 @@ export default function VideoLibrary({ onTaskCreated }: VideoLibraryProps) {
         // 此处逻辑复用 UploadZone 的逻辑，但不涉及文件上传
         const noteStyle = 'simple'
 
-        // 获取模型配置
-        const selectedModelId = localStorage.getItem('selectedModel')
-        const modelConfigs = localStorage.getItem('modelConfigs')
-        let modelConfig = null
-
-        if (selectedModelId && modelConfigs) {
-            try {
-                const configs = JSON.parse(modelConfigs)
-                const firstDashIndex = selectedModelId.indexOf('-')
-                if (firstDashIndex > 0) {
-                    const provider = selectedModelId.substring(0, firstDashIndex)
-                    const modelId = selectedModelId.substring(firstDashIndex + 1)
-                    const providerConfig = configs[provider]
-                    if (providerConfig) {
-                        modelConfig = {
-                            provider,
-                            api_key: providerConfig.apiKey || '',
-                            base_url: providerConfig.baseUrl || '',
-                            model: modelId,
-                        }
-                    }
-                }
-            } catch (e) {
-                console.error('解析模型配置失败:', e)
-            }
-        }
+        const modelConfig = getSelectedModelConfig(noteStyle)
 
         const toastId = toast.loading('正在创建任务...')
         setShowConfirm(false)

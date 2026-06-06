@@ -3,8 +3,11 @@ import { create } from 'zustand'
 export interface Task {
   id: string
   filename: string
-  status: 'pending' | 'processing' | 'transcribing' | 'summarizing' | 'completed' | 'failed'
+  status: 'pending' | 'processing' | 'transcribing' | 'transcribed' | 'summarizing' | 'completed' | 'failed'
   markdown?: string
+  errorMessage?: string
+  source?: 'upload' | 'bilibili' | 'web'
+  sourceUrl?: string
   createdAt?: string
 }
 

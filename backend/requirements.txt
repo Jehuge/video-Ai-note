@@ -18,3 +18,5 @@ yt-dlp
 aiofiles>=23.2.1
 httpx>=0.24.0
 tenacity>=8.2.0
+pywebview>=5.0
+pyinstaller>=6.0

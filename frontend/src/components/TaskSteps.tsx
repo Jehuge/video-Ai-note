@@ -34,7 +34,8 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
   useEffect(() => {
     if (!task) return
 
-    const isTranscribeCompleted = transcript && transcript.segments && transcript.segments.length > 0
+    const transcriptSegmentCount = transcript?.segments?.length || 0
+    const isTranscribeCompleted = task.status === 'transcribed' || transcriptSegmentCount > 0
 
     const initialSteps = [
       {
@@ -72,7 +73,7 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
         description: '从视频文件中提取音频（如果是视频）',
         status: (task.status === 'pending'
           ? 'waiting_confirm'
-          : ['processing', 'transcribing', 'summarizing', 'completed'].includes(task.status)
+          : ['processing', 'transcribing', 'transcribed', 'summarizing', 'completed'].includes(task.status)
             ? 'completed'
             : 'pending') as StepStatus,
         canConfirm: task.status === 'pending',
@@ -87,7 +88,7 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
       {
         id: 'transcribe',
         name: '音频转写',
-        description: '使用 AI 将音频转换为文字',
+        description: '使用本地 faster-whisper 将音频转换为文字',
         status: (isTranscribeCompleted
           ? 'completed'
           : task.status === 'transcribing'
@@ -101,7 +102,7 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
           <div className="flex items-center justify-between text-sm text-green-600">
             <div className="flex items-center gap-2">
               <FileText className="w-4 h-4" />
-              <span>转写完成，共 {transcript.segments.length} 条片段</span>
+              <span>转写完成，共 {transcriptSegmentCount} 条片段</span>
             </div>
             <button
               onClick={() => {
@@ -138,7 +139,7 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
           ? task.status === 'summarizing'
             ? 'processing'
             : 'completed'
-          : isTranscribeCompleted || task.status === 'transcribing'
+          : isTranscribeCompleted || task.status === 'transcribing' || task.status === 'transcribed'
             ? 'waiting_confirm'
             : 'pending') as StepStatus,
         canConfirm: isTranscribeCompleted,
@@ -318,6 +319,7 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
           updateTaskRef.current(taskId, {
             status: taskData.status,
             markdown: taskData.markdown || currentTask?.markdown || '',
+            errorMessage: taskData.error_message || '',
           })
 
           if (taskData.transcript) {
@@ -342,7 +344,7 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
     if (!taskId) return
 
     const task = tasks.find((t) => t.id === taskId)
-    if (!task || (task.status === 'completed' && !autoProcess) || task.status === 'failed') {
+    if (!task || (['completed', 'transcribed'].includes(task.status) && !autoProcess) || task.status === 'failed') {
       return
     }
 
@@ -356,6 +358,7 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
           updateTaskRef.current(taskId, {
             status: taskData.status,
             markdown: taskData.markdown || currentTask?.markdown || '',
+            errorMessage: taskData.error_message || '',
           })
 
           if (taskData.transcript) {
@@ -364,7 +367,7 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
 
           updateStepsStatus(taskData.status, taskData)
 
-          if (taskData.status === 'completed' || taskData.status === 'failed') {
+          if (taskData.status === 'completed' || taskData.status === 'failed' || taskData.status === 'transcribed') {
             clearInterval(interval)
             setAutoProcess(false)
           }
@@ -380,6 +383,13 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
   const updateStepsStatus = (status: string, taskData: any) => {
     setSteps((prev) =>
       prev.map((step) => {
+        if (status === 'failed') {
+          if (step.status === 'processing' || step.status === 'waiting_confirm') {
+            return { ...step, status: 'failed' as StepStatus }
+          }
+          return step
+        }
+
         if (step.id === 'transcribe') {
           if (taskData.transcript && taskData.transcript.segments) {
             return {
@@ -420,6 +430,8 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
             }
           } else if (status === 'transcribing') {
             return { ...step, status: 'processing' as StepStatus }
+          } else if (status === 'transcribed') {
+            return { ...step, status: 'completed' as StepStatus }
           }
         }
 
@@ -442,6 +454,10 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
 
         if (status === 'summarizing' && step.id === 'summarize') {
           return { ...step, status: 'processing' as StepStatus }
+        }
+
+        if (status === 'transcribed' && step.id === 'summarize') {
+          return { ...step, status: 'waiting_confirm' as StepStatus }
         }
 
         if (status === 'completed') {
@@ -570,6 +586,11 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
                 {task.filename}
               </h2>
               <p className="text-sm text-gray-500 font-medium opacity-80">任务 ID: {task.id.slice(0, 8)}...</p>
+              {task.status === 'failed' && task.errorMessage && (
+                <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {task.errorMessage}
+                </div>
+              )}
             </div>
 
             <h3 className="text-lg font-semibold text-gray-900 mb-6 px-1 flex items-center gap-2">
