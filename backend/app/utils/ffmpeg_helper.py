@@ -5,6 +5,7 @@ FFmpeg 工具模块
 import os
 import shutil
 import platform
+import subprocess
 from pathlib import Path
 from typing import Optional
 from app.utils.logger import get_logger
@@ -89,6 +90,21 @@ def get_ffmpeg_path() -> str:
         raise Exception(f"无法获取 ffmpeg: {e}")
 
 
+def hidden_subprocess_kwargs() -> dict:
+    """Return subprocess flags that keep helper binaries invisible on Windows."""
+    if platform.system().lower() != "windows":
+        return {}
+
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = 0
+
+    return {
+        "startupinfo": startupinfo,
+        "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    }
+
+
 def check_ffmpeg_available() -> bool:
     """
     检查 ffmpeg 是否可用
@@ -98,11 +114,11 @@ def check_ffmpeg_available() -> bool:
     try:
         ffmpeg_path = get_ffmpeg_path()
         # 验证 ffmpeg 是否真的可用
-        import subprocess
         result = subprocess.run(
             [ffmpeg_path, "-version"],
             capture_output=True,
-            timeout=5
+            timeout=5,
+            **hidden_subprocess_kwargs(),
         )
         return result.returncode == 0
     except Exception as e:

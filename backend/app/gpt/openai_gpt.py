@@ -11,9 +11,13 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-MAX_DIRECT_PROMPT_CHARS = 24000
+# Keep direct generation as the default for long-context models. A 256k-token
+# model can normally handle prompts far above 24k characters, so chunking is a
+# fallback instead of the first path.
+MAX_DIRECT_PROMPT_CHARS = int(os.getenv("NOTE_DIRECT_PROMPT_CHARS", "180000"))
 CHUNK_TARGET_CHARS = 12000
 MERGE_TARGET_CHARS = 18000
+NOTE_GENERATION_MODE = os.getenv("NOTE_GENERATION_MODE", "auto").strip().lower()
 ProgressCallback = Callable[[str, str], None]
 
 
@@ -59,11 +63,21 @@ class OpenAIGPT(GPT):
             )
 
         try:
-            if len(prompt) > MAX_DIRECT_PROMPT_CHARS and transcript.segments:
+            mode = self._generation_mode()
+            should_chunk_first = (
+                transcript.segments
+                and (
+                    mode == "chunk"
+                    or (mode == "auto" and len(prompt) > MAX_DIRECT_PROMPT_CHARS)
+                )
+            )
+
+            if should_chunk_first:
                 logger.info(
-                    "Transcript prompt is long (%s chars, %s segments); using chunked note generation",
+                    "Transcript prompt is long (%s chars, %s segments, mode=%s); using chunked note generation",
                     len(prompt),
                     len(transcript.segments),
+                    mode,
                 )
                 markdown = self._summarize_long_transcript(
                     transcript=transcript,
@@ -74,13 +88,30 @@ class OpenAIGPT(GPT):
                     progress_callback=progress_callback,
                 )
             else:
-                markdown = self._complete_markdown(
-                    system_content,
-                    prompt,
-                    temperature=0.7,
-                    progress_callback=progress_callback,
-                    progress_message="正在生成笔记",
-                )
+                try:
+                    markdown = self._complete_markdown(
+                        system_content,
+                        prompt,
+                        temperature=0.7,
+                        progress_callback=progress_callback,
+                        progress_message="正在生成笔记",
+                    )
+                except Exception as exc:
+                    if mode == "auto" and transcript.segments and self._is_context_limit_error(exc):
+                        logger.info(
+                            "Direct note generation hit a context limit (%s chars); retrying with chunked generation",
+                            len(prompt),
+                        )
+                        markdown = self._summarize_long_transcript(
+                            transcript=transcript,
+                            filename=filename,
+                            screenshot=screenshot,
+                            note_style=note_style,
+                            system_content=system_content,
+                            progress_callback=progress_callback,
+                        )
+                    else:
+                        raise
 
             logger.info("Note generation completed")
 
@@ -165,6 +196,12 @@ class OpenAIGPT(GPT):
                 "Please regenerate with simple mode or use a more stable model/provider."
             )
 
+        if self._is_context_limit_error(exc):
+            return (
+                "AI model context window is too small for this transcript. "
+                "Use a long-context model, or set NOTE_GENERATION_MODE=auto/chunk to allow segmented note generation."
+            )
+
         if isinstance(exc, APIStatusError):
             if exc.status_code in {429, 500, 502, 503, 504}:
                 return (
@@ -176,6 +213,31 @@ class OpenAIGPT(GPT):
             return f"AI provider returned HTTP {exc.status_code}: {message}"
 
         return f"AI note generation failed: {message or type(exc).__name__}"
+
+    def _generation_mode(self) -> str:
+        if NOTE_GENERATION_MODE in {"auto", "direct", "chunk"}:
+            return NOTE_GENERATION_MODE
+        logger.warning("Invalid NOTE_GENERATION_MODE=%s; falling back to auto", NOTE_GENERATION_MODE)
+        return "auto"
+
+    def _is_context_limit_error(self, exc: Exception) -> bool:
+        message = str(exc).lower()
+        status_code = getattr(exc, "status_code", None)
+        if isinstance(exc, APIStatusError) and status_code == 413:
+            return True
+        if status_code not in {None, 400, 413}:
+            return False
+        context_markers = (
+            "context_length_exceeded",
+            "maximum context length",
+            "context window",
+            "too many tokens",
+            "input is too long",
+            "prompt is too long",
+            "request too large",
+            "reduce the length",
+        )
+        return any(marker in message for marker in context_markers)
 
     def _summarize_long_transcript(
         self,

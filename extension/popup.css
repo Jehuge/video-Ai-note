@@ -71,6 +71,16 @@ button:disabled {
   padding: 10px 12px;
 }
 
+.secondary {
+  width: 100%;
+  margin-top: 8px;
+  background: #fff;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+  font-weight: 700;
+  padding: 9px 12px;
+}
+
 .section {
   display: grid;
   gap: 6px;
@@ -128,10 +138,23 @@ select {
 }
 
 #progressText,
-.empty {
+.empty,
+.cookie-info,
+.diagnostics {
   color: #64748b;
   font-size: 12px;
   margin-top: 8px;
+}
+
+.cookie-info,
+.diagnostics {
+  margin: -4px 0 12px;
+  line-height: 1.35;
+}
+
+.diagnostics {
+  margin-top: -8px;
+  color: #475569;
 }
 
 .hidden {

@@ -41,11 +41,14 @@
 
       <section class="options">
         <label><input id="screenshot" type="checkbox" /> 截图</label>
-        <label><input id="cookies" type="checkbox" /> 站点 Cookie</label>
+        <label><input id="cookies" type="checkbox" checked /> 站点 Cookie</label>
         <label><input id="autoRun" type="checkbox" checked /> 生成笔记</label>
       </section>
+      <p id="cookieInfo" class="cookie-info">站点 Cookie 默认用于解析登录清晰度。</p>
+      <p id="diagnostics" class="diagnostics hidden"></p>
 
       <button id="send" class="primary" disabled>生成视频笔记</button>
+      <button id="copyDiagnostics" class="secondary hidden">复制诊断</button>
 
       <section id="progress" class="progress hidden">
         <div class="bar"><span id="bar"></span></div>

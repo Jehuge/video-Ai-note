@@ -14,7 +14,7 @@ requests==2.32.3
 markdown>=3.0
 reportlab>=4.0.0
 playwright>=1.40.0
-yt-dlp
+yt-dlp[default,curl-cffi]>=2026.03.17
 aiofiles>=23.2.1
 httpx>=0.24.0
 tenacity>=8.2.0

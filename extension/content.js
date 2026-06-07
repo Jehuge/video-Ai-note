@@ -1,4 +1,7 @@
-const MEDIA_PATTERN = /\.(m3u8|mpd|mp4|webm|m4v|mov|mkv|flv|m4s|ts|aac|m4a)(\?|#|$)/i;
+const MEDIA_PATTERN = /(\.(m3u8|mpd|mp4|webm|m4v|mov|mkv|flv|m4s|ts|aac|m4a)(\?|#|$)|\/aweme\/v\d+\/(?:play|playwm|web\/aweme\/detail)\/?|\/video\/tos\/|\/tos-[^/?#]+\/|douyinvod\.com|douyinpic\.com)/i;
+const EMBEDDED_URL_PATTERN = /https?:\\?\/\\?\/[^"'<>\s]+/gi;
+const UNICODE_ESCAPED_URL_PATTERN = /https?:\\u002[fF]\\u002[fF][^"'<>\s]+/gi;
+const ESCAPED_MEDIA_URL_PATTERN = /https?(?:\\u002[fF]|\\\/|\/){2}[^"'<>\s\\]+(?:\\.[a-z0-9]{2,5}|\/(?:aweme\/v\d+\/(?:play|playwm)|video\/tos\/|tos-[^"'<>\s\\]+|[^"'<>\s\\]*douyin[^"'<>\s\\]*|[^"'<>\s\\]*video[^"'<>\s\\]*))[^"'<>\s]*/gi;
 let pickerActive = false;
 let pickerHighlight = null;
 let pickerHint = null;
@@ -24,7 +27,15 @@ function collectVideoStreams() {
       mimeType: extra.mimeType || "",
       height: extra.height,
       width: extra.width,
-      isFragment: extra.isFragment || isFragmentUrl(url),
+      filesize: extra.filesize,
+      companionAudioUrl: extra.companionAudioUrl || "",
+      companionAudioMimeType: extra.companionAudioMimeType || "",
+      companionAudioCodecs: extra.companionAudioCodecs || "",
+      bandwidth: extra.bandwidth,
+      codecs: extra.codecs || "",
+      isBilibiliPlayInfo: Boolean(extra.isBilibiliPlayInfo),
+      isDouyinPageData: Boolean(extra.isDouyinPageData),
+      isFragment: extra.isFragment !== undefined ? extra.isFragment : isFragmentUrl(url),
       isBlob: url.startsWith("blob:")
     });
   }
@@ -72,6 +83,21 @@ function collectVideoStreams() {
     }
   }
 
+  for (const stream of collectBilibiliPlayInfoStreams()) {
+    add(stream.url, stream);
+  }
+
+  for (const stream of collectDouyinPageDataStreams()) {
+    add(stream.url, stream);
+  }
+
+  for (const url of collectEmbeddedMediaUrls()) {
+    add(url, {
+      label: labelFromUrl(url),
+      source: "script"
+    });
+  }
+
   return { streams, videoCount };
 }
 
@@ -95,7 +121,15 @@ function collectStreamsFromElement(element) {
       mimeType: extra.mimeType || "",
       height: extra.height,
       width: extra.width,
-      isFragment: extra.isFragment || isFragmentUrl(url),
+      filesize: extra.filesize,
+      companionAudioUrl: extra.companionAudioUrl || "",
+      companionAudioMimeType: extra.companionAudioMimeType || "",
+      companionAudioCodecs: extra.companionAudioCodecs || "",
+      bandwidth: extra.bandwidth,
+      codecs: extra.codecs || "",
+      isBilibiliPlayInfo: Boolean(extra.isBilibiliPlayInfo),
+      isDouyinPageData: Boolean(extra.isDouyinPageData),
+      isFragment: extra.isFragment !== undefined ? extra.isFragment : isFragmentUrl(url),
       isBlob: url.startsWith("blob:")
     });
   }
@@ -259,6 +293,325 @@ function selectedPayload(element) {
   };
 }
 
+function pageRequestHeaders() {
+  const languages = Array.isArray(navigator.languages) && navigator.languages.length
+    ? navigator.languages.join(",")
+    : navigator.language || "";
+  return {
+    "User-Agent": navigator.userAgent || "",
+    "Accept-Language": languages,
+    "Referer": location.href,
+    "Origin": location.origin
+  };
+}
+
+function cleanEmbeddedUrl(rawUrl) {
+  if (!rawUrl) return "";
+  let url = rawUrl
+    .replace(/\\u002[fF]/g, "/")
+    .replace(/\\\//g, "/")
+    .replace(/&amp;/g, "&");
+  url = url.replace(/\\u0026/g, "&");
+  try {
+    url = decodeURIComponent(url);
+  } catch (_) {
+    // Keep the original URL if it contains intentionally escaped query params.
+  }
+  return MEDIA_PATTERN.test(url) ? url : "";
+}
+
+function extractJsonAfterMarker(text, marker) {
+  const index = text.indexOf(marker);
+  if (index < 0) return null;
+  const start = text.indexOf("{", index + marker.length);
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < text.length; i += 1) {
+    const char = text[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (char === "\\") {
+      escape = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (char === "{") depth += 1;
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          return JSON.parse(text.slice(start, i + 1));
+        } catch (_) {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function findPageJson(marker) {
+  for (const script of document.scripts || []) {
+    const text = script.textContent || "";
+    if (!text.includes(marker)) continue;
+    const parsed = extractJsonAfterMarker(text, marker);
+    if (parsed) return parsed;
+  }
+  return null;
+}
+
+function findJsonScriptById(id) {
+  const script = document.getElementById?.(id);
+  const text = script?.textContent || "";
+  if (!text.trim()) return null;
+  try {
+    return JSON.parse(text);
+  } catch (_) {
+    return null;
+  }
+}
+
+function mediaUrlFrom(item) {
+  if (!item || typeof item !== "object") return "";
+  const value = item.baseUrl || item.base_url || item.url;
+  if (!value) return "";
+  try {
+    return new URL(value, location.href).href;
+  } catch (_) {
+    return "";
+  }
+}
+
+function bilibiliFormatLabel(video) {
+  const height = Number.parseInt(video?.height || "", 10);
+  const codecs = video?.codecs ? ` ${video.codecs}` : "";
+  return height ? `${height}p B站页面轨道${codecs}` : `B站页面轨道${codecs}`;
+}
+
+function collectBilibiliPlayInfoStreams() {
+  if (!/\.bilibili\.com$/i.test(location.hostname)) return [];
+  const playInfo = findPageJson("window.__playinfo__");
+  const data = playInfo?.data || playInfo?.result || playInfo;
+  const dash = data?.dash;
+  if (!dash || !Array.isArray(dash.video)) return [];
+
+  const audios = [
+    ...(Array.isArray(dash.audio) ? dash.audio : []),
+    ...(Array.isArray(dash.dolby?.audio) ? dash.dolby.audio : []),
+    ...(dash.flac?.audio ? [dash.flac.audio] : [])
+  ].map((audio) => ({
+    url: mediaUrlFrom(audio),
+    bandwidth: Number(audio?.bandwidth || 0),
+    codecs: audio?.codecs || "",
+    mimeType: audio?.mimeType || audio?.mime_type || "audio/mp4"
+  })).filter((audio) => audio.url);
+
+  const bestAudio = audios.sort((a, b) => b.bandwidth - a.bandwidth)[0] || null;
+  const streams = [];
+  for (const video of dash.video || []) {
+    const url = mediaUrlFrom(video);
+    if (!url) continue;
+    const height = Number.parseInt(video.height || "", 10) || undefined;
+    streams.push({
+      url,
+      source: "bilibili-playinfo",
+      label: bilibiliFormatLabel(video),
+      mimeType: video.mimeType || video.mime_type || "video/mp4",
+      height,
+      width: Number.parseInt(video.width || "", 10) || undefined,
+      filesize: Number.parseInt(video.size || "", 10) || undefined,
+      companionAudioUrl: bestAudio?.url || "",
+      companionAudioMimeType: bestAudio?.mimeType || "",
+      companionAudioCodecs: bestAudio?.codecs || "",
+      bandwidth: Number(video.bandwidth || 0) || undefined,
+      codecs: video.codecs || "",
+      isFragment: false,
+      isBilibiliPlayInfo: true
+    });
+  }
+  return streams.sort((a, b) => (b.height || 0) - (a.height || 0)).slice(0, 12);
+}
+
+function walkObjects(value, visitor, depth = 0) {
+  if (!value || depth > 12) return;
+  if (Array.isArray(value)) {
+    for (const item of value) walkObjects(item, visitor, depth + 1);
+    return;
+  }
+  if (typeof value !== "object") return;
+  visitor(value);
+  for (const item of Object.values(value)) {
+    if (item && typeof item === "object") walkObjects(item, visitor, depth + 1);
+  }
+}
+
+function pickDouyinAwemeDetails() {
+  const details = [];
+  const seen = new Set();
+
+  function add(detail) {
+    if (!detail || typeof detail !== "object") return;
+    if (!detail.video && !detail.aweme_detail && !detail.itemStruct) return;
+    const normalized = detail.aweme_detail || detail.itemStruct || detail;
+    const key = normalized.aweme_id || normalized.id || JSON.stringify(normalized.video || {}).slice(0, 120);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    details.push(normalized);
+  }
+
+  const universal = findJsonScriptById("__UNIVERSAL_DATA_FOR_REHYDRATION__");
+  const universalScope = universal?.__DEFAULT_SCOPE__ || universal;
+  add(universalScope?.["webapp.video-detail"]?.itemInfo?.itemStruct);
+  walkObjects(universalScope, (item) => {
+    if (item?.video && (item.aweme_id || item.id || item.desc)) add(item);
+  });
+  const sigi = findJsonScriptById("SIGI_STATE") || findJsonScriptById("sigi-persisted-data");
+  walkObjects(sigi, (item) => {
+    if (item?.video && (item.aweme_id || item.id || item.desc)) add(item);
+  });
+
+  for (const script of document.scripts || []) {
+    const text = script.textContent || "";
+    if (!/(aweme_detail|aweme_details|itemStruct|bit_rate|play_addr|download_addr|playAddr|bitrateInfo)/i.test(text)) continue;
+    const parsed = extractJsonAfterMarker(text, "window.__DATA__")
+      || extractJsonAfterMarker(text, "window.__INITIAL_STATE__")
+      || extractJsonAfterMarker(text, "window.__douyin")
+      || extractJsonAfterMarker(text, "window.__playinfo__");
+    if (parsed) {
+      walkObjects(parsed, (item) => {
+        if (item?.aweme_detail) add(item.aweme_detail);
+        if (Array.isArray(item?.aweme_details)) {
+          for (const detail of item.aweme_details) add(detail);
+        }
+        for (const key of ["awemeList", "aweme_list", "itemList", "item_list", "videoList", "video_list"]) {
+          if (Array.isArray(item?.[key])) {
+            for (const detail of item[key]) add(detail);
+          }
+        }
+        if (item?.itemStruct) add(item.itemStruct);
+        if (item?.video && (item.aweme_id || item.id || item.desc)) add(item);
+      });
+    }
+  }
+  return details.slice(0, 4);
+}
+
+function douyinAddrUrls(addr) {
+  if (typeof addr === "string") {
+    const cleaned = cleanEmbeddedUrl(addr);
+    return cleaned ? [cleaned] : [];
+  }
+  if (Array.isArray(addr)) {
+    return addr.flatMap((item) => douyinAddrUrls(item));
+  }
+  if (!addr || typeof addr !== "object") return [];
+  const candidates = [
+    ...(Array.isArray(addr.url_list) ? addr.url_list : []),
+    ...(Array.isArray(addr.UrlList) ? addr.UrlList : []),
+    addr.url,
+    addr.uri,
+    addr.src,
+  ].filter(Boolean);
+  return candidates.map(cleanEmbeddedUrl).filter(Boolean);
+}
+
+function inferDouyinHeight(video, addr, fallbackHeight) {
+  const direct = Number.parseInt(addr?.height || addr?.Height || video?.height || "", 10);
+  if (direct) return direct;
+  const key = String(addr?.url_key || addr?.UrlKey || "");
+  const match = key.match(/_(\d{3,4})p(?:_|$)/i) || key.match(/(\d{3,4})[pP]/);
+  return match ? Number.parseInt(match[1], 10) : fallbackHeight;
+}
+
+function collectDouyinPageDataStreams() {
+  if (!/(^|\.)douyin\.com$/i.test(location.hostname) && !/(^|\.)iesdouyin\.com$/i.test(location.hostname)) {
+    return [];
+  }
+  const streams = [];
+  const seen = new Set();
+
+  function addStream(url, detail, addr, label, fallbackHeight) {
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    const video = detail.video || {};
+    const height = inferDouyinHeight(video, addr, fallbackHeight);
+    streams.push({
+      url,
+      source: "douyin-page-data",
+      label: height ? `${height}p 抖音页面数据` : label,
+      mimeType: "video/mp4",
+      height: height || undefined,
+      width: Number.parseInt(addr?.width || addr?.Width || video.width || "", 10) || undefined,
+      filesize: Number.parseInt(addr?.data_size || addr?.DataSize || "", 10) || undefined,
+      bandwidth: Number.parseInt(addr?.bit_rate || addr?.BitRate || "", 10) || undefined,
+      codecs: addr?.codec_type || addr?.CodecType || "",
+      isFragment: false,
+      isDouyinPageData: true
+    });
+  }
+
+  for (const detail of pickDouyinAwemeDetails()) {
+    const video = detail.video || {};
+    const fallbackHeight = Number.parseInt(video.height || "", 10) || undefined;
+    const addressItems = [];
+    if (video.play_addr) addressItems.push(["play_addr", video.play_addr]);
+    if (video.playAddr) addressItems.push(["playAddr", video.playAddr]);
+    if (video.download_addr) addressItems.push(["download_addr", video.download_addr]);
+    if (video.downloadAddr) addressItems.push(["downloadAddr", video.downloadAddr]);
+    if (video.play_addr_h264) addressItems.push(["play_addr_h264", video.play_addr_h264]);
+    if (video.play_addr_bytevc1) addressItems.push(["play_addr_bytevc1", video.play_addr_bytevc1]);
+    for (const bitrate of video.bit_rate || video.bitRate || []) {
+      if (bitrate.play_addr) addressItems.push([bitrate.gear_name || "bit_rate", bitrate.play_addr]);
+      if (bitrate.PlayAddr) addressItems.push([bitrate.GearName || "bitrateInfo", bitrate.PlayAddr]);
+    }
+    for (const bitrate of video.bitrateInfo || []) {
+      if (bitrate.PlayAddr) addressItems.push([bitrate.GearName || "bitrateInfo", bitrate.PlayAddr]);
+    }
+
+    for (const [label, addr] of addressItems) {
+      for (const url of douyinAddrUrls(addr)) {
+        addStream(url, detail, addr, label, fallbackHeight);
+      }
+    }
+  }
+  return streams.sort((a, b) => (b.height || 0) - (a.height || 0)).slice(0, 16);
+}
+
+function collectEmbeddedMediaUrls() {
+  const urls = [];
+  const seen = new Set();
+
+  function add(rawUrl) {
+    const url = cleanEmbeddedUrl(rawUrl);
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    urls.push(url);
+  }
+
+  for (const script of document.scripts || []) {
+    const text = script.textContent || "";
+    if (!/(douyin|douyinvod|aweme|play_addr|playAddr|PlayAddr|bitrateInfo|UrlList|url_list|video_id|m3u8|mp4|video\/tos|tos-)/i.test(text)) continue;
+    for (const match of text.matchAll(EMBEDDED_URL_PATTERN)) {
+      add(match[0]);
+    }
+    for (const match of text.matchAll(UNICODE_ESCAPED_URL_PATTERN)) {
+      add(match[0]);
+    }
+    for (const match of text.matchAll(ESCAPED_MEDIA_URL_PATTERN)) {
+      add(match[0]);
+    }
+  }
+  return urls.slice(0, 20);
+}
+
 function handlePickerMouseMove(event) {
   if (!pickerActive) return;
   updatePickerHighlight(event.target);
@@ -331,6 +684,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({
       pageTitle: document.title,
       pageUrl: location.href,
+      headers: pageRequestHeaders(),
       streams: result.streams,
       videoCount: result.videoCount
     });

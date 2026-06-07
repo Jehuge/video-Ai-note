@@ -23,6 +23,23 @@ class DetectedStream(BaseModel):
     source: Optional[str] = None
     isFragment: Optional[bool] = False
     isBlob: Optional[bool] = False
+    companionAudioUrl: Optional[str] = None
+    companionAudioMimeType: Optional[str] = None
+    companionAudioCodecs: Optional[str] = None
+    bandwidth: Optional[int] = None
+    codecs: Optional[str] = None
+    isBilibiliPlayInfo: Optional[bool] = False
+    isDouyinPageData: Optional[bool] = False
+
+
+class BrowserCookie(BaseModel):
+    name: str
+    value: str
+    domain: Optional[str] = None
+    path: Optional[str] = "/"
+    secure: Optional[bool] = False
+    expirationDate: Optional[float] = None
+    session: Optional[bool] = None
 
 
 class ResolveRequest(BaseModel):
@@ -31,12 +48,14 @@ class ResolveRequest(BaseModel):
     detectedStreams: List[DetectedStream] = Field(default_factory=list)
     headers: Dict[str, str] = Field(default_factory=dict)
     cookies: Optional[str] = None
+    cookieDetails: List[BrowserCookie] = Field(default_factory=list)
 
 
 class ImportRequest(ResolveRequest):
     candidateId: Optional[str] = None
     candidateUrl: Optional[str] = None
     formatId: Optional[str] = None
+    resolvedCandidates: List[Dict[str, Any]] = Field(default_factory=list)
     noteStyle: Optional[str] = "simple"
     autoRun: bool = True
     screenshot: bool = False
@@ -64,6 +83,7 @@ async def resolve_videos(payload: ResolveRequest, _: None = Depends(verify_bridg
         detected_streams=[item.model_dump() for item in payload.detectedStreams],
         headers=payload.headers,
         cookie=payload.cookies,
+        cookie_details=[item.model_dump() for item in payload.cookieDetails],
     )
     return R.success(result)
 

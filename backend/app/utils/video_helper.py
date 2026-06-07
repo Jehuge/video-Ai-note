@@ -4,7 +4,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 from app.utils.logger import get_logger
-from app.utils.ffmpeg_helper import get_ffmpeg_path
+from app.utils.ffmpeg_helper import get_ffmpeg_path, hidden_subprocess_kwargs
 
 logger = get_logger(__name__)
 
@@ -41,7 +41,8 @@ def generate_screenshot(video_path: str, output_dir: str, timestamp: int, index:
             command,
             capture_output=True,
             text=True,
-            check=True
+            check=True,
+            **hidden_subprocess_kwargs(),
         )
         logger.info(f"截图生成成功: {output_path} (时间戳: {timestamp}秒)")
         return str(output_path)

@@ -7,9 +7,14 @@ const state = {
   token: "",
   pageUrl: "",
   pageTitle: "",
+  pageHeaders: {},
   detectedStreams: [],
   selectedVideo: null,
   candidates: [],
+  resolveErrors: [],
+  diagnostics: null,
+  cookieHeader: "",
+  cookieDetails: [],
   videoCount: 0,
   jobTimer: null
 };
@@ -23,8 +28,11 @@ const els = {
   noteStyle: document.getElementById("noteStyle"),
   screenshot: document.getElementById("screenshot"),
   cookies: document.getElementById("cookies"),
+  cookieInfo: document.getElementById("cookieInfo"),
+  diagnostics: document.getElementById("diagnostics"),
   autoRun: document.getElementById("autoRun"),
   send: document.getElementById("send"),
+  copyDiagnostics: document.getElementById("copyDiagnostics"),
   empty: document.getElementById("empty"),
   progress: document.getElementById("progress"),
   bar: document.getElementById("bar"),
@@ -70,17 +78,270 @@ async function saveNoteStyle() {
   await chrome.storage.local.set({ [NOTE_STYLE_STORAGE_KEY]: els.noteStyle.value || "simple" });
 }
 
-async function collectSiteCookies() {
-  if (!els.cookies.checked || !/^https?:\/\//i.test(state.pageUrl || "")) return "";
+function cookieProbeUrls(pageUrl) {
+  const urls = [];
   try {
-    const cookies = await chrome.cookies.getAll({ url: state.pageUrl });
-    return cookies
-      .filter((item) => item.name && typeof item.value === "string")
-      .map((item) => `${item.name}=${item.value}`)
-      .join("; ");
+    const parsed = new URL(pageUrl);
+    urls.push(parsed.href);
+    const host = parsed.hostname.toLowerCase();
+    if (host.endsWith("bilibili.com")) {
+      urls.push(
+        "https://www.bilibili.com/",
+        "https://api.bilibili.com/",
+        "https://passport.bilibili.com/",
+        "https://t.bilibili.com/"
+      );
+    }
+    if (host.endsWith("douyin.com")) {
+      urls.push(
+        "https://www.douyin.com/",
+        "https://v.douyin.com/",
+        "https://www.iesdouyin.com/",
+        "https://snssdk.com/"
+      );
+    }
+    if (host.endsWith("iesdouyin.com")) {
+      urls.push(
+        "https://www.iesdouyin.com/",
+        "https://www.douyin.com/",
+        "https://v.douyin.com/",
+        "https://snssdk.com/"
+      );
+    }
+  } catch (_) {
+    return urls;
+  }
+  return [...new Set(urls)];
+}
+
+function cookieNames(cookieHeader) {
+  return new Set(
+    String(cookieHeader || "")
+      .split(";")
+      .map((item) => item.trim().split("=", 1)[0])
+      .filter(Boolean)
+  );
+}
+
+function updateCookieInfo(cookieHeader = "") {
+  if (!els.cookieInfo) return;
+  if (els.cookies && els.cookies.checked === false) {
+    els.cookieInfo.textContent = "站点 Cookie 已关闭：可能只能解析公开清晰度。";
+    els.cookieInfo.style.color = "#b45309";
+    return;
+  }
+  const names = cookieNames(cookieHeader);
+  let message = "站点 Cookie 已开启。";
+  let ok = true;
+  try {
+    const host = new URL(state.pageUrl || "").hostname.toLowerCase();
+    if (host.endsWith("bilibili.com")) {
+      ok = names.has("SESSDATA");
+      message = ok ? "已读取 B站登录 Cookie，可解析登录清晰度。" : "未读到 B站 SESSDATA，可能只能到 480p。";
+    } else if (host.endsWith("douyin.com") || host.endsWith("iesdouyin.com")) {
+      ok = names.has("s_v_web_id") || names.has("msToken") || names.has("ttwid");
+      message = ok ? "已读取抖音 fresh Cookie，可继续解析。" : "未读到抖音 fresh Cookie，解析可能失败。";
+    }
+  } catch (_) {
+    // Keep generic message.
+  }
+  els.cookieInfo.textContent = message;
+  els.cookieInfo.style.color = ok ? "#15803d" : "#b45309";
+}
+
+function hostKind() {
+  try {
+    const host = new URL(state.pageUrl || "").hostname.toLowerCase();
+    if (host.endsWith("bilibili.com")) return "bilibili";
+    if (host.endsWith("douyin.com") || host.endsWith("iesdouyin.com")) return "douyin";
   } catch (_) {
     return "";
   }
+  return "";
+}
+
+function formatDiagnostics(diagnostics) {
+  if (!diagnostics) return "";
+  const parts = [];
+  const maxHeight = diagnostics.maxHeight;
+  const formatCount = diagnostics.formatCount || 0;
+  const candidateCount = diagnostics.candidateCount || 0;
+  if (maxHeight) {
+    parts.push(`最高 ${maxHeight}p`);
+  } else if (formatCount) {
+    parts.push(`已解析 ${formatCount} 个格式`);
+  } else if (candidateCount) {
+    parts.push(`已找到 ${candidateCount} 个候选`);
+  }
+
+  const receivedCookies = diagnostics.receivedCookies || {};
+  const ytDlpCookies = diagnostics.ytDlpCookies || {};
+  const bilibiliApi = diagnostics.bilibiliApi || {};
+  const kind = hostKind();
+  if (kind === "bilibili") {
+    parts.push(receivedCookies.bilibiliSessdata ? "AInote 已收到 SESSDATA" : "AInote 未收到 SESSDATA");
+    if (receivedCookies.bilibiliSessdata) {
+      parts.push(ytDlpCookies.bilibiliSessdata === false ? "yt-dlp 未识别登录态" : "yt-dlp 已识别登录态");
+    }
+    if (bilibiliApi.bilibiliApiFormatHeights?.length) {
+      parts.push(`B站 API ${Math.max(...bilibiliApi.bilibiliApiFormatHeights)}p`);
+    }
+    if (bilibiliApi.bilibiliApiLogin === false) {
+      parts.push("B站 API 未登录");
+    }
+  } else if (kind === "douyin") {
+    parts.push(receivedCookies.douyinFresh ? "AInote 已收到抖音 fresh cookie" : "AInote 未收到抖音 fresh cookie");
+    if (receivedCookies.douyinFresh && ytDlpCookies.douyinFresh === false) {
+      parts.push("yt-dlp 未识别抖音 cookie");
+    }
+  }
+  if (diagnostics.detectedStreamCount) {
+    parts.push(`嗅探 ${diagnostics.detectedStreamCount} 条`);
+  }
+  if (diagnostics.extractors?.length) {
+    parts.push(diagnostics.extractors.slice(0, 2).join(", "));
+  }
+  if (diagnostics.ytDlpMessages?.length) {
+    parts.push(diagnostics.ytDlpMessages[0]);
+  }
+  return parts.join("；");
+}
+
+function updateDiagnostics(diagnostics = state.diagnostics) {
+  if (!els.diagnostics) return;
+  const text = formatDiagnostics(diagnostics);
+  els.diagnostics.textContent = text;
+  els.diagnostics.classList.toggle("hidden", !text);
+  els.copyDiagnostics?.classList.toggle("hidden", !hasDiagnosticsPayload());
+}
+
+function hasDiagnosticsPayload() {
+  return Boolean(
+    state.diagnostics
+    || state.resolveErrors.length
+    || state.candidates.length
+    || state.detectedStreams.length
+    || state.cookieDetails.length
+  );
+}
+
+function buildDiagnosticsPayload() {
+  const selected = selectedCandidate();
+  return {
+    app: "AInote Video Bridge",
+    createdAt: new Date().toISOString(),
+    pageUrl: state.pageUrl,
+    pageTitle: state.pageTitle,
+    hostKind: hostKind(),
+    videoCount: state.videoCount,
+    selectedCandidateId: selected?.id || "",
+    selectedFormatId: els.format?.value || "",
+    cookiesEnabled: els.cookies ? els.cookies.checked !== false : true,
+    cookieNames: state.cookieDetails.map((item) => item.name).filter(Boolean),
+    detectedStreams: state.detectedStreams.map((stream) => ({
+      url: stream.url,
+      label: stream.label,
+      source: stream.source,
+      height: stream.height,
+      mimeType: stream.mimeType,
+      isDouyinPageData: Boolean(stream.isDouyinPageData),
+      isBilibiliPlayInfo: Boolean(stream.isBilibiliPlayInfo),
+    })),
+    candidates: state.candidates.map((candidate) => ({
+      id: candidate.id,
+      title: candidate.title,
+      sourceUrl: candidate.sourceUrl,
+      extractor: candidate.extractor,
+      formats: (candidate.formats || []).map((format) => ({
+        formatId: format.formatId,
+        label: format.label,
+        height: format.height,
+        protocol: format.protocol,
+        sourceUrl: format.sourceUrl,
+        hasCompanionAudio: Boolean(format.companionAudioUrl),
+      })),
+    })),
+    diagnostics: state.diagnostics,
+    resolveErrors: state.resolveErrors,
+  };
+}
+
+async function copyDiagnostics() {
+  const text = JSON.stringify(buildDiagnosticsPayload(), null, 2);
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+  } else {
+    const area = document.createElement("textarea");
+    area.value = text;
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand("copy");
+    area.remove();
+  }
+  setStatus("诊断信息已复制", true);
+}
+
+function compactResolveError(error) {
+  const text = String(error || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  return text
+    .replace(/^page:\s*/i, "")
+    .replace(/^stream\s+\S+:\s*/i, "")
+    .slice(0, 120);
+}
+
+function resolveErrorSummary() {
+  const errors = (state.resolveErrors || []).map(compactResolveError).filter(Boolean);
+  if (!errors.length) return "";
+  return errors.slice(0, 2).join("；");
+}
+
+async function collectSiteCookies() {
+  if (els.cookies && els.cookies.checked === false) {
+    state.cookieHeader = "";
+    state.cookieDetails = [];
+    updateCookieInfo("");
+    return "";
+  }
+  if (!/^https?:\/\//i.test(state.pageUrl || "")) {
+    state.cookieHeader = "";
+    state.cookieDetails = [];
+    return "";
+  }
+  const cookieMap = new Map();
+  const cookieDetails = new Map();
+  try {
+    for (const url of cookieProbeUrls(state.pageUrl)) {
+      const cookies = await chrome.cookies.getAll({ url });
+      for (const item of cookies) {
+        if (item.name && typeof item.value === "string") {
+          cookieMap.set(item.name, item.value);
+          const key = `${item.domain || ""}|${item.path || "/"}|${item.name}`;
+          cookieDetails.set(key, {
+            name: item.name,
+            value: item.value,
+            domain: item.domain || "",
+            path: item.path || "/",
+            secure: Boolean(item.secure),
+            expirationDate: item.expirationDate,
+            session: Boolean(item.session)
+          });
+        }
+      }
+    }
+  } catch (_) {
+    state.cookieHeader = "";
+    state.cookieDetails = [];
+    updateCookieInfo("");
+    return "";
+  }
+  const cookieHeader = [...cookieMap.entries()]
+    .map(([name, value]) => `${name}=${value}`)
+    .join("; ");
+  state.cookieHeader = cookieHeader;
+  state.cookieDetails = [...cookieDetails.values()];
+  updateCookieInfo(cookieHeader);
+  return cookieHeader;
 }
 
 async function appFetch(path, options = {}) {
@@ -132,7 +393,8 @@ function uniqueStreams(streams) {
   return streams.filter((stream) => {
     if (!stream?.url || seen.has(stream.url)) return false;
     if (stream.isBlob || String(stream.url).startsWith("blob:")) return false;
-    if (stream.isFragment || isFragmentUrl(stream.url)) return false;
+    const isResolvedPageTrack = stream.isBilibiliPlayInfo || stream.isDouyinPageData;
+    if (!isResolvedPageTrack && (stream.isFragment || isFragmentUrl(stream.url))) return false;
     seen.add(stream.url);
     return true;
   });
@@ -160,6 +422,10 @@ async function collectPageStreams() {
   state.videoCount = Math.max(pageScan?.videoCount || 0, state.selectedVideo?.videoCount || 0);
   state.pageTitle = state.selectedVideo?.pageTitle || pageScan?.pageTitle || state.pageTitle;
   state.pageUrl = state.selectedVideo?.pageUrl || pageScan?.pageUrl || state.pageUrl;
+  state.pageHeaders = {
+    ...(pageScan?.headers || {}),
+    Referer: state.pageUrl
+  };
 }
 
 function canUsePageResolver() {
@@ -209,6 +475,41 @@ function mergeCandidates(primary, fallback) {
   return merged;
 }
 
+function candidateMaxHeight(candidate) {
+  return Math.max(
+    0,
+    ...((candidate?.formats || [])
+      .map((format) => Number.parseInt(format.height || "", 10) || 0))
+  );
+}
+
+function candidateBestBandwidth(candidate) {
+  return Math.max(
+    0,
+    ...((candidate?.formats || [])
+      .map((format) => Number.parseInt(format.bandwidth || "", 10) || 0))
+  );
+}
+
+function candidatePriority(candidate) {
+  const extractor = String(candidate?.extractor || "").toLowerCase();
+  if (extractor === "bilibili-api") return 40;
+  if (extractor.includes("bilibili") || extractor.includes("playinfo")) return 30;
+  if (extractor.includes("douyin") || extractor.includes("tiktok")) return 25;
+  if (extractor === "page-url" || extractor === "selected-area") return 5;
+  return 10;
+}
+
+function sortCandidatesByQuality(candidates) {
+  return [...(candidates || [])].sort((left, right) => {
+    const byHeight = candidateMaxHeight(right) - candidateMaxHeight(left);
+    if (byHeight) return byHeight;
+    const byPriority = candidatePriority(right) - candidatePriority(left);
+    if (byPriority) return byPriority;
+    return candidateBestBandwidth(right) - candidateBestBandwidth(left);
+  });
+}
+
 async function resolveVideos() {
   const cookies = await collectSiteCookies();
   const selectedStreams = uniqueStreams(state.selectedVideo?.streams || []);
@@ -220,12 +521,18 @@ async function resolveVideos() {
       pageUrl: state.pageUrl,
       pageTitle: state.pageTitle,
       detectedStreams: streamsToResolve,
-      cookies
+      headers: state.pageHeaders,
+      cookies,
+      cookieDetails: state.cookieDetails
     })
   });
   if (!response.ok) throw new Error(`Resolve failed: HTTP ${response.status}`);
   const json = await response.json();
-  state.candidates = (json.data?.candidates || []).filter((candidate) => !isFragmentUrl(candidate.sourceUrl || ""));
+  state.resolveErrors = json.data?.errors || [];
+  state.diagnostics = json.data?.diagnostics || null;
+  state.candidates = sortCandidatesByQuality(
+    (json.data?.candidates || []).filter((candidate) => !isFragmentUrl(candidate.sourceUrl || ""))
+  );
 }
 
 function renderCandidates() {
@@ -233,6 +540,7 @@ function renderCandidates() {
   els.format.innerHTML = "";
   els.empty.classList.toggle("hidden", state.candidates.length > 0);
   els.send.disabled = state.candidates.length === 0;
+  updateDiagnostics();
 
   for (const candidate of state.candidates) {
     const option = document.createElement("option");
@@ -288,13 +596,16 @@ async function importSelected() {
       pageUrl: state.pageUrl,
       pageTitle: state.pageTitle,
       detectedStreams: selectedStreams.length ? selectedStreams : state.detectedStreams,
+      headers: state.pageHeaders,
       candidateId: candidate.id,
       candidateUrl: candidate.sourceUrl,
       formatId: els.format.value,
+      resolvedCandidates: [candidate],
       noteStyle: els.noteStyle?.value || "simple",
       autoRun: els.autoRun.checked,
       screenshot: els.screenshot.checked,
-      cookies
+      cookies,
+      cookieDetails: state.cookieDetails
     })
   });
   if (!response.ok) throw new Error(`Import failed: HTTP ${response.status}`);
@@ -362,14 +673,21 @@ async function refresh() {
     await resolveVideos();
     state.candidates = mergeCandidates(state.candidates, fallback);
     renderCandidates();
-    setStatus(state.candidates.length ? "视频已就绪" : "未找到支持的视频", state.candidates.length > 0);
+    const errorSummary = resolveErrorSummary();
+    if (state.candidates.length) {
+      setStatus(errorSummary ? `视频已就绪；解析提示：${errorSummary}` : "视频已就绪", true);
+    } else {
+      setStatus(errorSummary ? `未找到支持的视频：${errorSummary}` : "未找到支持的视频", false);
+    }
   } catch (error) {
     if (fallback) {
       state.candidates = [fallback];
-      setStatus("先用当前选择，AInote 会继续解析");
+      state.diagnostics = null;
+      setStatus(`先用当前选择，AInote 会继续解析：${error.message}`);
     } else {
       setStatus(error.message);
       state.candidates = [];
+      state.diagnostics = null;
     }
     renderCandidates();
   }
@@ -395,12 +713,18 @@ els.candidate.addEventListener("change", renderFormats);
 els.noteStyle?.addEventListener("change", () => {
   saveNoteStyle().catch(() => {});
 });
+els.cookies?.addEventListener("change", () => {
+  updateCookieInfo("");
+});
 els.send.addEventListener("click", () => {
   importSelected().catch((error) => {
     updateProgress({ progress: 0, error: error.message });
     els.progress.classList.remove("hidden");
     els.send.disabled = state.candidates.length === 0;
   });
+});
+els.copyDiagnostics?.addEventListener("click", () => {
+  copyDiagnostics().catch((error) => setStatus(`复制诊断失败：${error.message}`));
 });
 
 refresh();
