@@ -175,6 +175,39 @@ class WebVideoServiceTests(unittest.TestCase):
         self.assertEqual(len(result["candidates"]), 1)
         self.assertEqual(result["candidates"][0]["sourceUrl"], "https://cdn.example.test/video.mp4")
 
+    def test_resolve_preserves_extensionless_douyin_media_urls(self):
+        class FakeYoutubeDL:
+            def __init__(self, _options):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def extract_info(self, *_args, **_kwargs):
+                raise RuntimeError("unsupported site")
+
+        with mock.patch.dict(sys.modules, {"yt_dlp": types.SimpleNamespace(YoutubeDL=FakeYoutubeDL)}):
+            result = web_video.resolve_web_video(
+                page_url="https://www.douyin.com/video/123456",
+                page_title="Douyin",
+                detected_streams=[
+                    {"url": "https://www.douyin.com/aweme/v1/play/?video_id=abc", "label": "Media stream"},
+                    {"url": "https://v3-dy-o.douyinvod.com/tos-cn-ve-15/abc/video", "label": "Media stream"},
+                    {"url": "https://static.example.test/app.js", "label": "Script"},
+                ],
+            )
+
+        self.assertEqual(
+            [candidate["sourceUrl"] for candidate in result["candidates"]],
+            [
+                "https://www.douyin.com/aweme/v1/play/?video_id=abc",
+                "https://v3-dy-o.douyinvod.com/tos-cn-ve-15/abc/video",
+            ],
+        )
+
     def test_choose_download_url_prefers_candidate_url(self):
         url = web_video._choose_download_url({
             "pageUrl": "https://example.test/page",
@@ -302,6 +335,45 @@ class WebVideoServiceTests(unittest.TestCase):
         self.assertIn(".douyin.com\tTRUE\t/\tTRUE\t1924992000\ts_v_web_id\tfresh", seen["cookiefile_content"])
         self.assertFalse(Path(seen["cookiefile"]).exists())
         self.assertEqual(result["candidates"][0]["formats"][0]["formatId"], "1080")
+
+    def test_resolve_returns_non_sensitive_diagnostics(self):
+        class FakeYoutubeDL:
+            def __init__(self, _options):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def extract_info(self, url, **_kwargs):
+                return {
+                    "title": "Resolved",
+                    "webpage_url": url,
+                    "extractor": "BiliBili",
+                    "formats": [
+                        {"format_id": "64", "height": 480, "ext": "mp4"},
+                        {"format_id": "80", "height": 1080, "ext": "mp4"},
+                    ],
+                }
+
+        with mock.patch.dict(sys.modules, {"yt_dlp": types.SimpleNamespace(YoutubeDL=FakeYoutubeDL)}):
+            result = web_video.resolve_web_video(
+                page_url="https://www.bilibili.com/video/BV1demo/",
+                cookie="SESSDATA=secret; bili_jct=csrf; s_v_web_id=fresh",
+                detected_streams=[{"url": "https://cdn.example.test/video.m3u8"}],
+            )
+
+        diagnostics = result["diagnostics"]
+        self.assertEqual(diagnostics["candidateCount"], 2)
+        self.assertEqual(diagnostics["formatCount"], 4)
+        self.assertEqual(diagnostics["maxHeight"], 1080)
+        self.assertEqual(diagnostics["extractors"][0], "BiliBili")
+        self.assertTrue(diagnostics["receivedCookies"]["bilibiliSessdata"])
+        self.assertTrue(diagnostics["receivedCookies"]["bilibiliCsrf"])
+        self.assertTrue(diagnostics["receivedCookies"]["douyinFresh"])
+        self.assertNotIn("secret", str(diagnostics))
 
     def test_download_passes_cookiefile_to_ytdlp_and_removes_it(self):
         with TemporaryDirectory() as tmp:

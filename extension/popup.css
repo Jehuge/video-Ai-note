@@ -129,15 +129,22 @@ select {
 
 #progressText,
 .empty,
-.cookie-info {
+.cookie-info,
+.diagnostics {
   color: #64748b;
   font-size: 12px;
   margin-top: 8px;
 }
 
-.cookie-info {
+.cookie-info,
+.diagnostics {
   margin: -4px 0 12px;
   line-height: 1.35;
+}
+
+.diagnostics {
+  margin-top: -8px;
+  color: #475569;
 }
 
 .hidden {

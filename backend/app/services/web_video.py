@@ -230,6 +230,27 @@ def _stream_protocol(stream: Dict[str, Any]) -> str:
     return "direct"
 
 
+def _is_probable_media_url(url: str, mime: str = "") -> bool:
+    if not url:
+        return False
+    suffix = _stream_suffix(url)
+    lower_url = url.lower()
+    lower_mime = (mime or "").lower()
+    if suffix in MEDIA_EXTENSIONS or suffix in STREAM_EXTENSIONS:
+        return True
+    if any(token in lower_url for token in (
+        "/aweme/v1/play",
+        "/aweme/v1/playwm",
+        "/aweme/v1/web/aweme/detail",
+        "/video/tos/",
+        "/tos-",
+        "douyinvod.com",
+        "douyinpic.com",
+    )):
+        return True
+    return any(token in lower_mime for token in ("video", "audio", "mpegurl", "dash"))
+
+
 def _normalize_detected_streams(streams: List[Dict[str, Any]], page_title: str = "") -> List[Dict[str, Any]]:
     normalized = []
     seen = set()
@@ -245,10 +266,9 @@ def _normalize_detected_streams(streams: List[Dict[str, Any]], page_title: str =
 
         parsed = urlparse(url)
         suffix = _stream_suffix(url)
-        if suffix and suffix not in MEDIA_EXTENSIONS and suffix not in STREAM_EXTENSIONS:
-            mime = _stream_mime(stream)
-            if "video" not in mime and "audio" not in mime and "mpegurl" not in mime and "dash" not in mime:
-                continue
+        mime = _stream_mime(stream)
+        if not _is_probable_media_url(url, mime):
+            continue
 
         ext = suffix.lstrip(".") if suffix else (stream.get("ext") or ("m3u8" if _is_manifest_stream(stream) else "mp4"))
         protocol = _stream_protocol(stream)
@@ -450,6 +470,56 @@ def _dedupe_candidates(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     return deduped
 
 
+def _cookie_names(cookie: Optional[str] = None, cookie_details: Optional[List[Dict[str, Any]]] = None) -> set:
+    names = set()
+    for item in cookie_details or []:
+        name = str(item.get("name") or "").strip()
+        if name:
+            names.add(name)
+    for item in (cookie or "").split(";"):
+        if "=" not in item:
+            continue
+        name = item.strip().split("=", 1)[0].strip()
+        if name:
+            names.add(name)
+    return names
+
+
+def _candidate_diagnostics(candidates: List[Dict[str, Any]], errors: List[str],
+                           cookie: Optional[str] = None,
+                           cookie_details: Optional[List[Dict[str, Any]]] = None,
+                           detected_streams: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    cookie_names = _cookie_names(cookie, cookie_details)
+    format_count = 0
+    max_height = None
+    extractors = []
+    for candidate in candidates:
+        extractor = candidate.get("extractor")
+        if extractor and extractor not in extractors:
+            extractors.append(extractor)
+        for fmt in candidate.get("formats") or []:
+            format_count += 1
+            height = fmt.get("height")
+            if isinstance(height, int):
+                max_height = max(max_height or 0, height)
+
+    stream_count = len(detected_streams or [])
+    return {
+        "candidateCount": len(candidates),
+        "formatCount": format_count,
+        "maxHeight": max_height,
+        "extractors": extractors[:6],
+        "detectedStreamCount": stream_count,
+        "receivedCookies": {
+            "bilibiliSessdata": "SESSDATA" in cookie_names,
+            "bilibiliCsrf": "bili_jct" in cookie_names,
+            "douyinFresh": bool({"s_v_web_id", "msToken", "ttwid"} & cookie_names),
+            "douyinLogin": bool({"sid_tt", "sessionid", "uid_tt"} & cookie_names),
+        },
+        "errorCount": len(errors),
+    }
+
+
 def _info_to_candidates(info: Dict[str, Any], page_title: str, source_url: str,
                         candidate_prefix: str = "yt", max_items: int = 8) -> List[Dict[str, Any]]:
     if not isinstance(info, dict):
@@ -578,12 +648,20 @@ def resolve_web_video(page_url: str, page_title: str = "", detected_streams: Opt
 
     candidates.extend(_normalize_detected_streams(fallback_streams, page_title=page_title))
     candidates = _dedupe_candidates(candidates)
+    diagnostics = _candidate_diagnostics(
+        candidates,
+        errors,
+        cookie=cookie,
+        cookie_details=cookie_details,
+        detected_streams=detected_streams,
+    )
 
     return {
         "pageUrl": page_url,
         "pageTitle": page_title,
         "candidates": candidates,
         "errors": errors,
+        "diagnostics": diagnostics,
     }
 
 

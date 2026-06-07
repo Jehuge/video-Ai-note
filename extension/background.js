@@ -1,4 +1,4 @@
-const MEDIA_PATTERN = /(\.(m3u8|mpd|mp4|webm|m4v|mov|mkv|flv|m4s|ts|aac|m4a)(\?|#|$)|\/aweme\/v\d+\/(?:play|playwm)\/?|\/video\/tos\/|\/tos-[^/?#]+\/|douyinvod\.com|douyinpic\.com)/i;
+const MEDIA_PATTERN = /(\.(m3u8|mpd|mp4|webm|m4v|mov|mkv|flv|m4s|ts|aac|m4a)(\?|#|$)|\/aweme\/v\d+\/(?:play|playwm|web\/aweme\/detail)\/?|\/video\/tos\/|\/tos-[^/?#]+\/|douyinvod\.com|douyinpic\.com)/i;
 const STREAMS_BY_TAB = new Map();
 const SELECTION_BY_TAB = new Map();
 const MAX_STREAMS = 80;

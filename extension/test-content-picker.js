@@ -72,7 +72,7 @@ const context = {
     body,
     scripts: [
       {
-        textContent: 'window.__DATA__={"play_addr":{"url_list":["https:\\/\\/www.douyin.com\\/aweme\\/v1\\/play\\/?video_id=abc","https:\\/\\/www.douyin.com\\/aweme\\/v1\\/playwm\\/?video_id=wm","https:\\/\\/v3-dy-o.douyinvod.com\\/tos-cn-ve-15\\/abc\\/video"]}}'
+        textContent: 'window.__DATA__={"play_addr":{"url_list":["https:\\/\\/www.douyin.com\\/aweme\\/v1\\/play\\/?video_id=abc","https:\\/\\/www.douyin.com\\/aweme\\/v1\\/playwm\\/?video_id=wm","https:\\/\\/v3-dy-o.douyinvod.com\\/tos-cn-ve-15\\/abc\\/video"]},"video":{"bitrateInfo":[{"PlayAddr":{"UrlList":["https:\\u002F\\u002Fv3-dy-o.douyinvod.com\\u002Ftos-cn-ve-15\\u002Fabc\\u002Fbitrate-video?mime_type=video_mp4\\u0026a=b"]}}]}}'
       }
     ],
     createElement: (tag) => createElement(tag),
@@ -140,6 +140,10 @@ assert(
 assert(
   scanResponse.streams.some((stream) => stream.url.includes("douyinvod.com/tos-cn-ve-15/abc/video")),
   "scan should collect embedded Douyin CDN URLs"
+);
+assert(
+  scanResponse.streams.some((stream) => stream.url.includes("douyinvod.com/tos-cn-ve-15/abc/bitrate-video")),
+  "scan should collect escaped Douyin bitrate URLs"
 );
 
 console.log("extension content picker tests passed");

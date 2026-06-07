@@ -12,6 +12,7 @@ const state = {
   selectedVideo: null,
   candidates: [],
   resolveErrors: [],
+  diagnostics: null,
   cookieHeader: "",
   cookieDetails: [],
   videoCount: 0,
@@ -28,6 +29,7 @@ const els = {
   screenshot: document.getElementById("screenshot"),
   cookies: document.getElementById("cookies"),
   cookieInfo: document.getElementById("cookieInfo"),
+  diagnostics: document.getElementById("diagnostics"),
   autoRun: document.getElementById("autoRun"),
   send: document.getElementById("send"),
   empty: document.getElementById("empty"),
@@ -144,6 +146,54 @@ function updateCookieInfo(cookieHeader = "") {
   }
   els.cookieInfo.textContent = message;
   els.cookieInfo.style.color = ok ? "#15803d" : "#b45309";
+}
+
+function hostKind() {
+  try {
+    const host = new URL(state.pageUrl || "").hostname.toLowerCase();
+    if (host.endsWith("bilibili.com")) return "bilibili";
+    if (host.endsWith("douyin.com") || host.endsWith("iesdouyin.com")) return "douyin";
+  } catch (_) {
+    return "";
+  }
+  return "";
+}
+
+function formatDiagnostics(diagnostics) {
+  if (!diagnostics) return "";
+  const parts = [];
+  const maxHeight = diagnostics.maxHeight;
+  const formatCount = diagnostics.formatCount || 0;
+  const candidateCount = diagnostics.candidateCount || 0;
+  if (maxHeight) {
+    parts.push(`最高 ${maxHeight}p`);
+  } else if (formatCount) {
+    parts.push(`已解析 ${formatCount} 个格式`);
+  } else if (candidateCount) {
+    parts.push(`已找到 ${candidateCount} 个候选`);
+  }
+
+  const receivedCookies = diagnostics.receivedCookies || {};
+  const kind = hostKind();
+  if (kind === "bilibili") {
+    parts.push(receivedCookies.bilibiliSessdata ? "AInote 已收到 SESSDATA" : "AInote 未收到 SESSDATA");
+  } else if (kind === "douyin") {
+    parts.push(receivedCookies.douyinFresh ? "AInote 已收到抖音 fresh cookie" : "AInote 未收到抖音 fresh cookie");
+  }
+  if (diagnostics.detectedStreamCount) {
+    parts.push(`嗅探 ${diagnostics.detectedStreamCount} 条`);
+  }
+  if (diagnostics.extractors?.length) {
+    parts.push(diagnostics.extractors.slice(0, 2).join(", "));
+  }
+  return parts.join("；");
+}
+
+function updateDiagnostics(diagnostics = state.diagnostics) {
+  if (!els.diagnostics) return;
+  const text = formatDiagnostics(diagnostics);
+  els.diagnostics.textContent = text;
+  els.diagnostics.classList.toggle("hidden", !text);
 }
 
 function compactResolveError(error) {
@@ -358,6 +408,7 @@ async function resolveVideos() {
   if (!response.ok) throw new Error(`Resolve failed: HTTP ${response.status}`);
   const json = await response.json();
   state.resolveErrors = json.data?.errors || [];
+  state.diagnostics = json.data?.diagnostics || null;
   state.candidates = (json.data?.candidates || []).filter((candidate) => !isFragmentUrl(candidate.sourceUrl || ""));
 }
 
@@ -366,6 +417,7 @@ function renderCandidates() {
   els.format.innerHTML = "";
   els.empty.classList.toggle("hidden", state.candidates.length > 0);
   els.send.disabled = state.candidates.length === 0;
+  updateDiagnostics();
 
   for (const candidate of state.candidates) {
     const option = document.createElement("option");
@@ -506,10 +558,12 @@ async function refresh() {
   } catch (error) {
     if (fallback) {
       state.candidates = [fallback];
+      state.diagnostics = null;
       setStatus(`先用当前选择，AInote 会继续解析：${error.message}`);
     } else {
       setStatus(error.message);
       state.candidates = [];
+      state.diagnostics = null;
     }
     renderCandidates();
   }

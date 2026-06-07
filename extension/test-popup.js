@@ -47,7 +47,7 @@ function runPopupTest({
   jobResponse = { status: "completed", progress: 100 }
 }) {
   const elements = {};
-  for (const id of ["status", "pick", "refresh", "candidate", "format", "noteStyle", "screenshot", "cookies", "cookieInfo", "autoRun", "send", "empty", "progress", "bar", "progressText"]) {
+  for (const id of ["status", "pick", "refresh", "candidate", "format", "noteStyle", "screenshot", "cookies", "cookieInfo", "diagnostics", "autoRun", "send", "empty", "progress", "bar", "progressText"]) {
     elements[id] = createElement(id);
   }
   elements.cookies.checked = cookiesChecked !== false;
@@ -141,7 +141,11 @@ function runPopupTest({
         if (resolveResponse instanceof Error) throw resolveResponse;
         const data = Array.isArray(resolveResponse)
           ? { candidates: resolveResponse }
-          : { candidates: resolveResponse?.candidates || [], errors: resolveResponse?.errors || [] };
+          : {
+              candidates: resolveResponse?.candidates || [],
+              errors: resolveResponse?.errors || [],
+              diagnostics: resolveResponse?.diagnostics || null
+            };
         return {
           ok: true,
           status: 200,
@@ -245,6 +249,40 @@ async function testResolveErrorsAreShownWithFallback() {
 
   assert(env.elements.send.disabled === false, "fallback should remain sendable when resolve returns errors");
   assert(env.elements.status.textContent.includes("Fresh cookies"), "resolve errors should be visible in popup status");
+}
+
+async function testResolveDiagnosticsAreShown() {
+  const env = runPopupTest({
+    pageScan: {
+      pageUrl: "https://www.bilibili.com/video/BV1demo/",
+      pageTitle: "Bilibili demo",
+      videoCount: 1,
+      streams: []
+    },
+    resolveResponse: {
+      candidates: [{
+        id: "yt-0",
+        title: "Bilibili demo",
+        sourceUrl: "https://www.bilibili.com/video/BV1demo/",
+        extractor: "BiliBili",
+        formats: [{ formatId: "64+ba/best", label: "480p mp4", height: 480 }]
+      }],
+      diagnostics: {
+        candidateCount: 1,
+        formatCount: 1,
+        maxHeight: 480,
+        detectedStreamCount: 0,
+        extractors: ["BiliBili"],
+        receivedCookies: { bilibiliSessdata: true }
+      }
+    }
+  });
+
+  await env.context.__initialRefresh;
+
+  assert(env.elements.diagnostics.textContent.includes("最高 480p"), "diagnostics should show max resolved height");
+  assert(env.elements.diagnostics.textContent.includes("AInote 已收到 SESSDATA"), "diagnostics should show backend cookie receipt");
+  assert(env.elements.diagnostics.textContent.includes("BiliBili"), "diagnostics should show extractor name");
 }
 
 async function testCookiesAreOptIn() {
@@ -498,6 +536,7 @@ async function testCanceledJobStopsPolling() {
   await testPageFallbackWhenResolveIsSlow();
   await testAppOfflineDisablesSend();
   await testResolveErrorsAreShownWithFallback();
+  await testResolveDiagnosticsAreShown();
   await testCookiesAreOptIn();
   await testCookiesCanBeDisabled();
   await testBilibiliMissingSessdataWarnsAboutLowQuality();

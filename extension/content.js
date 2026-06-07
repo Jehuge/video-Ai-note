@@ -1,5 +1,7 @@
-const MEDIA_PATTERN = /(\.(m3u8|mpd|mp4|webm|m4v|mov|mkv|flv|m4s|ts|aac|m4a)(\?|#|$)|\/aweme\/v\d+\/(?:play|playwm)\/?|\/video\/tos\/|\/tos-[^/?#]+\/|douyinvod\.com|douyinpic\.com)/i;
+const MEDIA_PATTERN = /(\.(m3u8|mpd|mp4|webm|m4v|mov|mkv|flv|m4s|ts|aac|m4a)(\?|#|$)|\/aweme\/v\d+\/(?:play|playwm|web\/aweme\/detail)\/?|\/video\/tos\/|\/tos-[^/?#]+\/|douyinvod\.com|douyinpic\.com)/i;
 const EMBEDDED_URL_PATTERN = /https?:\\?\/\\?\/[^"'<>\s]+/gi;
+const UNICODE_ESCAPED_URL_PATTERN = /https?:\\u002[fF]\\u002[fF][^"'<>\s]+/gi;
+const ESCAPED_MEDIA_URL_PATTERN = /https?(?:\\u002[fF]|\\\/|\/){2}[^"'<>\s\\]+(?:\\.[a-z0-9]{2,5}|\/(?:aweme\/v\d+\/(?:play|playwm)|video\/tos\/|tos-[^"'<>\s\\]+|[^"'<>\s\\]*douyin[^"'<>\s\\]*|[^"'<>\s\\]*video[^"'<>\s\\]*))[^"'<>\s]*/gi;
 let pickerActive = false;
 let pickerHighlight = null;
 let pickerHint = null;
@@ -285,6 +287,7 @@ function cleanEmbeddedUrl(rawUrl) {
     .replace(/\\u002[fF]/g, "/")
     .replace(/\\\//g, "/")
     .replace(/&amp;/g, "&");
+  url = url.replace(/\\u0026/g, "&");
   try {
     url = decodeURIComponent(url);
   } catch (_) {
@@ -296,14 +299,25 @@ function cleanEmbeddedUrl(rawUrl) {
 function collectEmbeddedMediaUrls() {
   const urls = [];
   const seen = new Set();
+
+  function add(rawUrl) {
+    const url = cleanEmbeddedUrl(rawUrl);
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    urls.push(url);
+  }
+
   for (const script of document.scripts || []) {
     const text = script.textContent || "";
-    if (!/(douyin|douyinvod|aweme|play_addr|video_id|m3u8|mp4|video\/tos|tos-)/i.test(text)) continue;
+    if (!/(douyin|douyinvod|aweme|play_addr|playAddr|PlayAddr|bitrateInfo|UrlList|url_list|video_id|m3u8|mp4|video\/tos|tos-)/i.test(text)) continue;
     for (const match of text.matchAll(EMBEDDED_URL_PATTERN)) {
-      const url = cleanEmbeddedUrl(match[0]);
-      if (!url || seen.has(url)) continue;
-      seen.add(url);
-      urls.push(url);
+      add(match[0]);
+    }
+    for (const match of text.matchAll(UNICODE_ESCAPED_URL_PATTERN)) {
+      add(match[0]);
+    }
+    for (const match of text.matchAll(ESCAPED_MEDIA_URL_PATTERN)) {
+      add(match[0]);
     }
   }
   return urls.slice(0, 20);
