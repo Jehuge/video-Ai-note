@@ -64,6 +64,7 @@ YTDLP_DIAGNOSTIC_MARKERS = (
     "http error 412",
 )
 BILIBILI_BVID_PATTERN = re.compile(r"(BV[0-9A-Za-z]+)", re.IGNORECASE)
+DOUYIN_VIDEO_ID_PATTERN = re.compile(r"/(?:video|share/video)/(\d+)", re.IGNORECASE)
 BILIBILI_MIXIN_KEY_ENC_TAB = [
     46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49,
     33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40,
@@ -418,6 +419,28 @@ def _normalize_page_url(url: str) -> str:
     return url
 
 
+def _douyin_video_id_from_url(url: str) -> Optional[str]:
+    try:
+        parsed = urlparse(url or "")
+    except Exception:
+        return None
+    host = parsed.netloc.lower()
+    if not (host.endswith("douyin.com") or host.endswith("iesdouyin.com")):
+        return None
+    match = DOUYIN_VIDEO_ID_PATTERN.search(parsed.path)
+    return match.group(1) if match else None
+
+
+def _douyin_headers(headers: Optional[Dict[str, str]] = None, referer: str = "") -> Dict[str, str]:
+    result = dict(DEFAULT_BROWSER_HEADERS)
+    result["Accept"] = "application/json, text/plain, */*"
+    result["Referer"] = referer or "https://www.douyin.com/"
+    for key, value in (headers or {}).items():
+        if value and key.lower() not in {"cookie", "set-cookie", "authorization"}:
+            result[key] = value
+    return result
+
+
 def _safe_cookie_value(value: Any) -> str:
     return str(value or "").replace("\r", "").replace("\n", "")
 
@@ -608,6 +631,147 @@ def _sort_candidates_by_quality(candidates: List[Dict[str, Any]]) -> List[Dict[s
         ),
         reverse=True,
     )
+
+
+def _douyin_addr_urls(addr: Any) -> List[str]:
+    if isinstance(addr, str):
+        return [addr] if addr.startswith(("http://", "https://")) else []
+    if isinstance(addr, list):
+        urls: List[str] = []
+        for item in addr:
+            urls.extend(_douyin_addr_urls(item))
+        return urls
+    if not isinstance(addr, dict):
+        return []
+    urls = []
+    for value in [
+        *(addr.get("url_list") or []),
+        *(addr.get("UrlList") or []),
+        addr.get("url"),
+        addr.get("uri"),
+        addr.get("src"),
+    ]:
+        if isinstance(value, str) and value.startswith(("http://", "https://")):
+            urls.append(value)
+    return urls
+
+
+def _douyin_addr_height(video: Dict[str, Any], addr: Dict[str, Any], fallback: Optional[int] = None) -> Optional[int]:
+    for key in ("height", "Height"):
+        try:
+            if addr.get(key):
+                return int(addr.get(key))
+        except (TypeError, ValueError):
+            pass
+    try:
+        if video.get("height"):
+            return int(video.get("height"))
+    except (TypeError, ValueError):
+        pass
+    url_key = str(addr.get("url_key") or addr.get("UrlKey") or "")
+    match = re.search(r"_(\d{3,4})p(?:_|$)", url_key, flags=re.IGNORECASE) or re.search(r"(\d{3,4})[pP]", url_key)
+    if match:
+        return int(match.group(1))
+    return fallback
+
+
+def _douyin_address_items(video: Dict[str, Any]) -> List[tuple]:
+    items = []
+    for key in ("play_addr", "playAddr", "download_addr", "downloadAddr", "play_addr_h264", "play_addr_bytevc1"):
+        if video.get(key):
+            items.append((key, video[key], {}))
+    for bitrate in video.get("bit_rate") or video.get("bitRate") or []:
+        if bitrate.get("play_addr"):
+            items.append((bitrate.get("gear_name") or "bit_rate", bitrate["play_addr"], bitrate))
+        if bitrate.get("PlayAddr"):
+            items.append((bitrate.get("GearName") or "bitrateInfo", bitrate["PlayAddr"], bitrate))
+    for bitrate in video.get("bitrateInfo") or []:
+        if bitrate.get("PlayAddr"):
+            items.append((bitrate.get("GearName") or "bitrateInfo", bitrate["PlayAddr"], bitrate))
+    return items
+
+
+def _douyin_detail_to_candidate(detail: Dict[str, Any], page_url: str, page_title: str = "",
+                                candidate_prefix: str = "douyin-web-api") -> Optional[Dict[str, Any]]:
+    video = detail.get("video") or {}
+    if not isinstance(video, dict):
+        return None
+    formats = []
+    seen = set()
+    fallback_height = _format_filesize(video.get("height"))
+    for index, (label, addr, meta) in enumerate(_douyin_address_items(video), start=1):
+        if not isinstance(addr, dict):
+            continue
+        height = _douyin_addr_height(video, addr, fallback_height)
+        width = _format_filesize(addr.get("width") or addr.get("Width") or video.get("width"))
+        filesize = _format_filesize(addr.get("data_size") or addr.get("DataSize"))
+        bandwidth = _format_filesize(addr.get("bit_rate") or addr.get("BitRate") or meta.get("bit_rate") or meta.get("BitRate"))
+        codecs = addr.get("codec_type") or addr.get("CodecType") or meta.get("codec_type") or meta.get("CodecType") or ""
+        for url in _douyin_addr_urls(addr):
+            if url in seen:
+                continue
+            seen.add(url)
+            formats.append({
+                "formatId": f"douyin-web-api-{index}",
+                "label": f"{height}p {label}" if height else str(label),
+                "height": height,
+                "width": width,
+                "ext": "mp4",
+                "filesize": filesize,
+                "protocol": "direct",
+                "bandwidth": bandwidth,
+                "codecs": codecs,
+                "sourceUrl": url,
+            })
+    if not formats:
+        return None
+    formats.sort(key=lambda item: (item.get("height") or 0, item.get("bandwidth") or 0), reverse=True)
+    aweme_id = detail.get("aweme_id") or detail.get("id") or _douyin_video_id_from_url(page_url) or "video"
+    return {
+        "id": f"{candidate_prefix}-{aweme_id}",
+        "title": detail.get("desc") or page_title or "Douyin video",
+        "sourceUrl": page_url,
+        "extractor": "douyin-web-api",
+        "duration": _format_filesize(video.get("duration")),
+        "thumbnail": ((video.get("cover") or {}).get("url_list") or [None])[0],
+        "formats": formats,
+    }
+
+
+def _douyin_web_api_candidates(page_url: str, page_title: str = "", headers: Optional[Dict[str, str]] = None,
+                               cookie: Optional[str] = None, cookie_details: Optional[List[Dict[str, Any]]] = None,
+                               diagnostics: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    aweme_id = _douyin_video_id_from_url(_normalize_page_url(page_url))
+    if not aweme_id:
+        return []
+
+    import requests
+
+    request_headers = _douyin_headers(headers, referer=page_url)
+    cookie_header = _cookie_header_from_details(cookie, cookie_details)
+    if cookie_header:
+        request_headers["Cookie"] = cookie_header
+    response = requests.get(
+        "https://www.douyin.com/aweme/v1/web/aweme/detail/",
+        params={"aweme_id": aweme_id},
+        headers=request_headers,
+        timeout=15,
+    )
+    response.raise_for_status()
+    data = response.json()
+    detail = data.get("aweme_detail") or {}
+    if diagnostics is not None:
+        diagnostics["douyinWebApiCode"] = data.get("status_code")
+        diagnostics["douyinWebApiHasDetail"] = bool(detail)
+    if not detail:
+        message = data.get("status_msg") or data.get("message") or "Douyin web detail API did not return aweme_detail"
+        raise RuntimeError(str(message))
+    candidate = _douyin_detail_to_candidate(detail, page_url=page_url, page_title=page_title)
+    if diagnostics is not None and candidate:
+        diagnostics["douyinWebApiFormatHeights"] = [
+            fmt.get("height") for fmt in candidate.get("formats") or [] if fmt.get("height")
+        ]
+    return [candidate] if candidate else []
 
 
 def _bilibili_bvid_from_url(url: str) -> Optional[str]:
@@ -930,7 +1094,8 @@ def _candidate_diagnostics(candidates: List[Dict[str, Any]], errors: List[str],
                            detected_streams: Optional[List[Dict[str, Any]]] = None,
                            yt_dlp_messages: Optional[List[str]] = None,
                            yt_dlp_cookies: Optional[Dict[str, Any]] = None,
-                           bilibili_api: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                           bilibili_api: Optional[Dict[str, Any]] = None,
+                           douyin_api: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     cookie_names = _cookie_names(cookie, cookie_details)
     format_count = 0
     max_height = None
@@ -961,6 +1126,7 @@ def _candidate_diagnostics(candidates: List[Dict[str, Any]], errors: List[str],
         "ytDlpCookies": yt_dlp_cookies or {},
         "ytDlpMessages": list(yt_dlp_messages or [])[:6],
         "bilibiliApi": bilibili_api or {},
+        "douyinApi": douyin_api or {},
         "errorCount": len(errors),
     }
 
@@ -1053,6 +1219,7 @@ def resolve_web_video(page_url: str, page_title: str = "", detected_streams: Opt
     yt_dlp_messages: List[str] = []
     yt_dlp_cookie_diagnostics: Dict[str, Any] = {}
     bilibili_api_diagnostics: Dict[str, Any] = {}
+    douyin_api_diagnostics: Dict[str, Any] = {}
 
     if page_url:
         try:
@@ -1081,6 +1248,19 @@ def resolve_web_video(page_url: str, page_title: str = "", detected_streams: Opt
             ))
         except Exception as exc:
             errors.append(f"bilibili-api: {exc}")
+            _append_unique_diagnostic(yt_dlp_messages, str(exc))
+
+        try:
+            candidates.extend(_douyin_web_api_candidates(
+                _normalize_page_url(page_url),
+                page_title=page_title,
+                headers=headers,
+                cookie=cookie,
+                cookie_details=cookie_details,
+                diagnostics=douyin_api_diagnostics,
+            ))
+        except Exception as exc:
+            errors.append(f"douyin-web-api: {exc}")
             _append_unique_diagnostic(yt_dlp_messages, str(exc))
 
     fallback_streams = []
@@ -1129,6 +1309,7 @@ def resolve_web_video(page_url: str, page_title: str = "", detected_streams: Opt
         yt_dlp_messages=yt_dlp_messages,
         yt_dlp_cookies=yt_dlp_cookie_diagnostics,
         bilibili_api=bilibili_api_diagnostics,
+        douyin_api=douyin_api_diagnostics,
     )
 
     return {
@@ -1157,6 +1338,22 @@ def _choose_download_url(payload: Dict[str, Any]) -> str:
         if candidate["id"] == candidate_id:
             return candidate["sourceUrl"]
     return _normalize_page_url(payload.get("pageUrl") or payload.get("page_url") or "")
+
+
+def _selected_resolved_format(payload: Dict[str, Any]) -> Dict[str, Any]:
+    candidate_id = payload.get("candidateId") or payload.get("candidate_id")
+    candidate_url = payload.get("candidateUrl") or payload.get("candidate_url")
+    format_id = str(payload.get("formatId") or payload.get("format_id") or "")
+    for candidate in (payload.get("resolvedCandidates") or payload.get("resolved_candidates") or []):
+        if candidate_id and candidate.get("id") != candidate_id:
+            continue
+        if not candidate_id and candidate_url and candidate.get("sourceUrl") != candidate_url:
+            continue
+        for fmt in candidate.get("formats") or []:
+            if format_id and str(fmt.get("formatId") or "") != format_id:
+                continue
+            return fmt
+    return {}
 
 
 def _download_with_ytdlp(job_id: str, payload: Dict[str, Any]) -> Path:
@@ -1233,7 +1430,8 @@ def _download_direct_url(url: str, target_path: Path, headers: Dict[str, str], j
 
 
 def _download_selected_direct_media(job_id: str, payload: Dict[str, Any], suffix: str = ".mp4") -> Path:
-    url = _choose_download_url(payload)
+    selected_format = _selected_resolved_format(payload)
+    url = selected_format.get("sourceUrl") or selected_format.get("url") or _choose_download_url(payload)
     if not url:
         raise ValueError("No direct media URL was provided")
 
@@ -1349,7 +1547,7 @@ def _run_import_job(job_id: str, payload: Dict[str, Any]) -> None:
         format_id = str(payload.get("formatId") or payload.get("format_id") or "")
         if format_id == "bilibili-playinfo" or format_id.startswith("bilibili-api"):
             downloaded_path = _download_bilibili_playinfo(job_id, payload)
-        elif format_id == "douyin-page-data":
+        elif format_id == "douyin-page-data" or format_id.startswith("douyin-web-api"):
             downloaded_path = _download_selected_direct_media(job_id, payload)
         else:
             downloaded_path = _download_with_ytdlp(job_id, payload)

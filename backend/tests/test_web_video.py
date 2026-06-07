@@ -249,6 +249,79 @@ class WebVideoServiceTests(unittest.TestCase):
         self.assertEqual(candidate["formats"][0]["height"], 1080)
         self.assertEqual(candidate["formats"][0]["filesize"], 123456)
 
+    def test_resolve_uses_douyin_web_detail_api_when_ytdlp_fails(self):
+        class FakeYoutubeDL:
+            def __init__(self, _options):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def extract_info(self, *_args, **_kwargs):
+                raise RuntimeError("Fresh cookies are needed")
+
+        class FakeResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {
+                    "status_code": 0,
+                    "aweme_detail": {
+                        "aweme_id": "123456",
+                        "desc": "Douyin detail",
+                        "video": {
+                            "height": 1080,
+                            "width": 1920,
+                            "duration": 120000,
+                            "play_addr": {
+                                "url_list": ["https://v3-dy.example.test/play-720.mp4"],
+                                "height": 720,
+                                "width": 1280,
+                                "data_size": 111,
+                            },
+                            "bit_rate": [{
+                                "gear_name": "normal_1080",
+                                "bit_rate": 2000000,
+                                "play_addr": {
+                                    "url_list": ["https://v3-dy.example.test/play-1080.mp4"],
+                                    "height": 1080,
+                                    "width": 1920,
+                                    "data_size": 222,
+                                },
+                            }],
+                        },
+                    },
+                }
+
+        seen = {}
+
+        def fake_get(url, **kwargs):
+            seen["url"] = url
+            seen["kwargs"] = kwargs
+            return FakeResponse()
+
+        with mock.patch.dict(sys.modules, {"yt_dlp": types.SimpleNamespace(YoutubeDL=FakeYoutubeDL)}), \
+                mock.patch("requests.get", side_effect=fake_get):
+            result = web_video.resolve_web_video(
+                page_url="https://www.douyin.com/video/123456",
+                page_title="Douyin",
+                cookie="s_v_web_id=fresh",
+            )
+
+        candidate = next(candidate for candidate in result["candidates"] if candidate["extractor"] == "douyin-web-api")
+        self.assertEqual(candidate["formats"][0]["formatId"], "douyin-web-api-2")
+        self.assertEqual(candidate["formats"][0]["height"], 1080)
+        self.assertEqual(candidate["formats"][0]["sourceUrl"], "https://v3-dy.example.test/play-1080.mp4")
+        self.assertEqual(result["diagnostics"]["douyinApi"]["douyinWebApiHasDetail"], True)
+        self.assertEqual(result["diagnostics"]["douyinApi"]["douyinWebApiFormatHeights"], [1080, 720])
+        self.assertEqual(seen["url"], "https://www.douyin.com/aweme/v1/web/aweme/detail/")
+        self.assertEqual(seen["kwargs"]["params"]["aweme_id"], "123456")
+        self.assertIn("s_v_web_id=fresh", seen["kwargs"]["headers"]["Cookie"])
+
     def test_resolve_preserves_bilibili_playinfo_companion_audio(self):
         class FakeYoutubeDL:
             def __init__(self, _options):
@@ -790,6 +863,55 @@ class WebVideoServiceTests(unittest.TestCase):
             self.assertEqual(seen["headers"]["Referer"], "https://www.douyin.com/video/123456")
             self.assertEqual(seen["headers"]["Accept-Language"], "zh-CN")
             self.assertEqual(seen["label"], "Downloading selected Douyin media")
+            self.assertTrue(list(upload_dir.glob(f"{updated.task_id}.mp4")))
+
+    def test_run_import_job_downloads_douyin_web_api_format_directly(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            upload_dir = tmp_path / "uploads"
+            output_dir = tmp_path / "notes"
+            upload_dir.mkdir()
+            output_dir.mkdir()
+            seen = {}
+
+            def fake_download_direct(url, target_path, headers, job_id, label):
+                seen["url"] = url
+                seen["headers"] = headers
+                target_path.write_bytes(b"video")
+                return target_path
+
+            with mock.patch.object(web_video, "UPLOAD_DIR", upload_dir), \
+                    mock.patch.object(web_video, "NOTE_OUTPUT_DIR", output_dir), \
+                    mock.patch.object(web_video, "_download_direct_url", side_effect=fake_download_direct), \
+                    mock.patch.object(web_video, "_download_with_ytdlp", side_effect=AssertionError("yt-dlp should not run")), \
+                    mock.patch.object(web_video, "load_active_model_config", return_value={}), \
+                    mock.patch.object(web_video, "create_task"):
+                job = web_video.job_manager.create("https://www.douyin.com/video/123456")
+                web_video._run_import_job(job.job_id, {
+                    "pageUrl": "https://www.douyin.com/video/123456",
+                    "pageTitle": "Douyin API",
+                    "candidateId": "douyin-web-api-123456",
+                    "candidateUrl": "https://www.douyin.com/video/123456",
+                    "formatId": "douyin-web-api-2",
+                    "resolvedCandidates": [{
+                        "id": "douyin-web-api-123456",
+                        "sourceUrl": "https://www.douyin.com/video/123456",
+                        "formats": [{
+                            "formatId": "douyin-web-api-1",
+                            "sourceUrl": "https://v3-dy.example.test/play-720.mp4",
+                        }, {
+                            "formatId": "douyin-web-api-2",
+                            "sourceUrl": "https://v3-dy.example.test/play-1080.mp4",
+                        }],
+                    }],
+                    "cookies": "s_v_web_id=fresh",
+                    "autoRun": False,
+                })
+
+            updated = web_video.job_manager.get(job.job_id)
+            self.assertEqual(updated.status, "completed")
+            self.assertEqual(seen["url"], "https://v3-dy.example.test/play-1080.mp4")
+            self.assertEqual(seen["headers"]["Cookie"], "s_v_web_id=fresh")
             self.assertTrue(list(upload_dir.glob(f"{updated.task_id}.mp4")))
 
     def test_run_import_job_uses_bilibili_playinfo_downloader(self):
