@@ -70,7 +70,25 @@ class OpenAIGPTTests(unittest.TestCase):
         self.assertEqual(events[-1][0], "正在生成笔记")
         self.assertEqual(events[-1][1], markdown)
 
-    def test_long_transcript_uses_chunked_generation_and_final_merge(self):
+    def test_long_transcript_uses_direct_generation_by_default(self):
+        fake_client = mock.Mock()
+        fake_client.chat.completions.create.return_value = [_chunk("# Direct note")]
+
+        with mock.patch("app.gpt.openai_gpt.create_openai_client", return_value=fake_client):
+            gpt = OpenAIGPT(api_key="sk-test", base_url="https://example.test/v1", model="demo")
+
+        segments = [
+            TranscriptSegment(start=i * 2, end=i * 2 + 1, text="x" * 500)
+            for i in range(60)
+        ]
+        transcript = TranscriptResult(language="zh", full_text=" ".join(seg.text for seg in segments), segments=segments)
+
+        markdown = gpt.summarize(transcript, filename="long.mp4")
+
+        self.assertEqual(markdown, "# Direct note")
+        self.assertEqual(fake_client.chat.completions.create.call_count, 1)
+
+    def test_chunk_mode_uses_chunked_generation_and_final_merge(self):
         fake_client = mock.Mock()
         fake_client.chat.completions.create.side_effect = [
             [_chunk("chunk one")],
@@ -89,16 +107,41 @@ class OpenAIGPTTests(unittest.TestCase):
         transcript = TranscriptResult(language="zh", full_text=" ".join(seg.text for seg in segments), segments=segments)
         events = []
 
-        markdown = gpt.summarize(
-            transcript,
-            filename="long.mp4",
-            progress_callback=lambda message, partial: events.append((message, partial)),
-        )
+        with mock.patch("app.gpt.openai_gpt.NOTE_GENERATION_MODE", "chunk"):
+            markdown = gpt.summarize(
+                transcript,
+                filename="long.mp4",
+                progress_callback=lambda message, partial: events.append((message, partial)),
+            )
 
         self.assertEqual(markdown, "# Final note")
         self.assertEqual(fake_client.chat.completions.create.call_count, 4)
         self.assertTrue(any("正在生成第 1/3 段摘要" in message for message, _ in events))
         self.assertTrue(any(message == "正在合并全片笔记" for message, _ in events))
+
+    def test_auto_mode_falls_back_to_chunking_on_context_limit(self):
+        fake_client = mock.Mock()
+        fake_client.chat.completions.create.side_effect = [
+            Exception("context_length_exceeded: maximum context length exceeded"),
+            [_chunk("chunk one")],
+            [_chunk("chunk two")],
+            [_chunk("chunk three")],
+            [_chunk("# Final note")],
+        ]
+
+        with mock.patch("app.gpt.openai_gpt.create_openai_client", return_value=fake_client):
+            gpt = OpenAIGPT(api_key="sk-test", base_url="https://example.test/v1", model="demo")
+
+        segments = [
+            TranscriptSegment(start=i * 2, end=i * 2 + 1, text="x" * 500)
+            for i in range(60)
+        ]
+        transcript = TranscriptResult(language="zh", full_text=" ".join(seg.text for seg in segments), segments=segments)
+
+        markdown = gpt.summarize(transcript, filename="long.mp4")
+
+        self.assertEqual(markdown, "# Final note")
+        self.assertEqual(fake_client.chat.completions.create.call_count, 5)
 
 
 def _chunk(content):

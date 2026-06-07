@@ -71,6 +71,7 @@ def ensure_playwright_chromium():
         print(f"Playwright Chromium is missing, attempting install: {first_line}")
         try:
             from playwright._impl._driver import compute_driver_executable, get_driver_env
+            from app.utils.ffmpeg_helper import hidden_subprocess_kwargs
 
             driver_executable, driver_cli = compute_driver_executable()
             result = subprocess.run(
@@ -80,6 +81,7 @@ def ensure_playwright_chromium():
                 check=False,
                 env=get_driver_env(),
                 timeout=600,
+                **hidden_subprocess_kwargs(),
             )
             if result.returncode == 0:
                 print("Playwright Chromium install completed")

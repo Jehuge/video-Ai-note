@@ -13,7 +13,7 @@ from app.services.note_progress import clear_note_progress, write_note_progress
 from app.transcriber.transcriber_provider import get_transcriber
 from app.utils.logger import get_logger
 from app.utils.video_helper import generate_screenshot
-from app.utils.ffmpeg_helper import get_ffmpeg_path
+from app.utils.ffmpeg_helper import get_ffmpeg_path, hidden_subprocess_kwargs
 
 logger = get_logger(__name__)
 
@@ -153,7 +153,8 @@ class NoteGenerator:
                 command,
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
+                **hidden_subprocess_kwargs(),
             )
             
             logger.info(f"音频提取完成: {audio_path}")
