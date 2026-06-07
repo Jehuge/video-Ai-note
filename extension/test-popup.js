@@ -42,11 +42,12 @@ function runPopupTest({
   appReady = true,
   resolveResponse,
   cookiesChecked = true,
+  cookieProvider = null,
   backgroundSelection = null,
   jobResponse = { status: "completed", progress: 100 }
 }) {
   const elements = {};
-  for (const id of ["status", "pick", "refresh", "candidate", "format", "noteStyle", "screenshot", "cookies", "autoRun", "send", "empty", "progress", "bar", "progressText"]) {
+  for (const id of ["status", "pick", "refresh", "candidate", "format", "noteStyle", "screenshot", "cookies", "cookieInfo", "autoRun", "send", "empty", "progress", "bar", "progressText"]) {
     elements[id] = createElement(id);
   }
   elements.cookies.checked = cookiesChecked !== false;
@@ -115,6 +116,7 @@ function runPopupTest({
       cookies: {
         getAll: async (details) => {
           cookieCalls.push(details);
+          if (cookieProvider) return cookieProvider(details);
           cookieCallIndex += 1;
           if (details.url === "https://api.bilibili.com/") {
             return [
@@ -247,6 +249,7 @@ async function testCookiesAreOptIn() {
   assert(body.cookies.includes("bili_jct=csrf"), "resolve should include bilibili API-domain cookies");
   assert(body.headers["User-Agent"] === "Chrome Test", "resolve should send browser headers");
   assert(body.headers.Referer === "https://www.bilibili.com/video/BV1demo/", "resolve should send referer");
+  assert(env.elements.cookieInfo.textContent.includes("已读取 B站登录 Cookie"), "popup should show bilibili login cookie status");
 }
 
 async function testCookiesCanBeDisabled() {
@@ -266,6 +269,24 @@ async function testCookiesCanBeDisabled() {
   assert(env.cookieCalls.length === 0, "cookies should not be read when unchecked");
   const resolveCall = env.fetchCalls.find((call) => call.url.endsWith("/extension/videos/resolve"));
   assert(JSON.parse(resolveCall.options.body).cookies === "", "resolve should not send cookies when disabled");
+  assert(env.elements.cookieInfo.textContent.includes("站点 Cookie 已关闭"), "popup should explain disabled cookie mode");
+}
+
+async function testBilibiliMissingSessdataWarnsAboutLowQuality() {
+  const env = runPopupTest({
+    pageScan: {
+      pageUrl: "https://www.bilibili.com/video/BV1demo/",
+      pageTitle: "Bilibili demo",
+      videoCount: 1,
+      streams: []
+    },
+    resolveResponse: [],
+    cookieProvider: async () => [{ name: "DedeUserID", value: "123" }]
+  });
+
+  await env.context.__initialRefresh;
+
+  assert(env.elements.cookieInfo.textContent.includes("未读到 B站 SESSDATA"), "popup should warn when bilibili login cookie is missing");
 }
 
 async function testDouyinCookiesReadFreshCookieDomains() {
@@ -286,6 +307,7 @@ async function testDouyinCookiesReadFreshCookieDomains() {
   const resolveCall = env.fetchCalls.find((call) => call.url.endsWith("/extension/videos/resolve"));
   const body = JSON.parse(resolveCall.options.body);
   assert(body.cookies.includes("s_v_web_id=fresh"), "resolve should include fresh Douyin visitor cookies");
+  assert(env.elements.cookieInfo.textContent.includes("已读取抖音 fresh Cookie"), "popup should show douyin fresh cookie status");
 }
 
 async function testImportSendsCandidateUrl() {
@@ -447,6 +469,7 @@ async function testCanceledJobStopsPolling() {
   await testAppOfflineDisablesSend();
   await testCookiesAreOptIn();
   await testCookiesCanBeDisabled();
+  await testBilibiliMissingSessdataWarnsAboutLowQuality();
   await testDouyinCookiesReadFreshCookieDomains();
   await testImportSendsCandidateUrl();
   await testImportSendsSelectedNoteStyle();

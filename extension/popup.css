@@ -128,10 +128,16 @@ select {
 }
 
 #progressText,
-.empty {
+.empty,
+.cookie-info {
   color: #64748b;
   font-size: 12px;
   margin-top: 8px;
+}
+
+.cookie-info {
+  margin: -4px 0 12px;
+  line-height: 1.35;
 }
 
 .hidden {

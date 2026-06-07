@@ -24,6 +24,7 @@ const els = {
   noteStyle: document.getElementById("noteStyle"),
   screenshot: document.getElementById("screenshot"),
   cookies: document.getElementById("cookies"),
+  cookieInfo: document.getElementById("cookieInfo"),
   autoRun: document.getElementById("autoRun"),
   send: document.getElementById("send"),
   empty: document.getElementById("empty"),
@@ -92,8 +93,46 @@ function cookieProbeUrls(pageUrl) {
   return [...new Set(urls)];
 }
 
+function cookieNames(cookieHeader) {
+  return new Set(
+    String(cookieHeader || "")
+      .split(";")
+      .map((item) => item.trim().split("=", 1)[0])
+      .filter(Boolean)
+  );
+}
+
+function updateCookieInfo(cookieHeader = "") {
+  if (!els.cookieInfo) return;
+  if (els.cookies && els.cookies.checked === false) {
+    els.cookieInfo.textContent = "站点 Cookie 已关闭：可能只能解析公开清晰度。";
+    els.cookieInfo.style.color = "#b45309";
+    return;
+  }
+  const names = cookieNames(cookieHeader);
+  let message = "站点 Cookie 已开启。";
+  let ok = true;
+  try {
+    const host = new URL(state.pageUrl || "").hostname.toLowerCase();
+    if (host.endsWith("bilibili.com")) {
+      ok = names.has("SESSDATA");
+      message = ok ? "已读取 B站登录 Cookie，可解析登录清晰度。" : "未读到 B站 SESSDATA，可能只能到 480p。";
+    } else if (host.endsWith("douyin.com") || host.endsWith("iesdouyin.com")) {
+      ok = names.has("s_v_web_id") || names.has("msToken") || names.has("ttwid");
+      message = ok ? "已读取抖音 fresh Cookie，可继续解析。" : "未读到抖音 fresh Cookie，解析可能失败。";
+    }
+  } catch (_) {
+    // Keep generic message.
+  }
+  els.cookieInfo.textContent = message;
+  els.cookieInfo.style.color = ok ? "#15803d" : "#b45309";
+}
+
 async function collectSiteCookies() {
-  if (els.cookies && els.cookies.checked === false) return "";
+  if (els.cookies && els.cookies.checked === false) {
+    updateCookieInfo("");
+    return "";
+  }
   if (!/^https?:\/\//i.test(state.pageUrl || "")) return "";
   const cookieMap = new Map();
   try {
@@ -106,11 +145,14 @@ async function collectSiteCookies() {
       }
     }
   } catch (_) {
+    updateCookieInfo("");
     return "";
   }
-  return [...cookieMap.entries()]
+  const cookieHeader = [...cookieMap.entries()]
     .map(([name, value]) => `${name}=${value}`)
     .join("; ");
+  updateCookieInfo(cookieHeader);
+  return cookieHeader;
 }
 
 async function appFetch(path, options = {}) {
@@ -430,6 +472,9 @@ els.refresh.addEventListener("click", refresh);
 els.candidate.addEventListener("change", renderFormats);
 els.noteStyle?.addEventListener("change", () => {
   saveNoteStyle().catch(() => {});
+});
+els.cookies?.addEventListener("change", () => {
+  updateCookieInfo("");
 });
 els.send.addEventListener("click", () => {
   importSelected().catch((error) => {
