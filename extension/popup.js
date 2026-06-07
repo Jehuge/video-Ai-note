@@ -12,6 +12,8 @@ const state = {
   selectedVideo: null,
   candidates: [],
   resolveErrors: [],
+  cookieHeader: "",
+  cookieDetails: [],
   videoCount: 0,
   jobTimer: null
 };
@@ -146,27 +148,48 @@ function resolveErrorSummary() {
 
 async function collectSiteCookies() {
   if (els.cookies && els.cookies.checked === false) {
+    state.cookieHeader = "";
+    state.cookieDetails = [];
     updateCookieInfo("");
     return "";
   }
-  if (!/^https?:\/\//i.test(state.pageUrl || "")) return "";
+  if (!/^https?:\/\//i.test(state.pageUrl || "")) {
+    state.cookieHeader = "";
+    state.cookieDetails = [];
+    return "";
+  }
   const cookieMap = new Map();
+  const cookieDetails = new Map();
   try {
     for (const url of cookieProbeUrls(state.pageUrl)) {
       const cookies = await chrome.cookies.getAll({ url });
       for (const item of cookies) {
         if (item.name && typeof item.value === "string") {
           cookieMap.set(item.name, item.value);
+          const key = `${item.domain || ""}|${item.path || "/"}|${item.name}`;
+          cookieDetails.set(key, {
+            name: item.name,
+            value: item.value,
+            domain: item.domain || "",
+            path: item.path || "/",
+            secure: Boolean(item.secure),
+            expirationDate: item.expirationDate,
+            session: Boolean(item.session)
+          });
         }
       }
     }
   } catch (_) {
+    state.cookieHeader = "";
+    state.cookieDetails = [];
     updateCookieInfo("");
     return "";
   }
   const cookieHeader = [...cookieMap.entries()]
     .map(([name, value]) => `${name}=${value}`)
     .join("; ");
+  state.cookieHeader = cookieHeader;
+  state.cookieDetails = [...cookieDetails.values()];
   updateCookieInfo(cookieHeader);
   return cookieHeader;
 }
@@ -313,7 +336,8 @@ async function resolveVideos() {
       pageTitle: state.pageTitle,
       detectedStreams: streamsToResolve,
       headers: state.pageHeaders,
-      cookies
+      cookies,
+      cookieDetails: state.cookieDetails
     })
   });
   if (!response.ok) throw new Error(`Resolve failed: HTTP ${response.status}`);
@@ -389,7 +413,8 @@ async function importSelected() {
       noteStyle: els.noteStyle?.value || "simple",
       autoRun: els.autoRun.checked,
       screenshot: els.screenshot.checked,
-      cookies
+      cookies,
+      cookieDetails: state.cookieDetails
     })
   });
   if (!response.ok) throw new Error(`Import failed: HTTP ${response.status}`);

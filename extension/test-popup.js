@@ -120,14 +120,14 @@ function runPopupTest({
           cookieCallIndex += 1;
           if (details.url === "https://api.bilibili.com/") {
             return [
-              { name: "SESSDATA", value: "demo" },
-              { name: "bili_jct", value: "csrf" }
+              { name: "SESSDATA", value: "demo", domain: ".bilibili.com", path: "/", secure: true, expirationDate: 1924992000 },
+              { name: "bili_jct", value: "csrf", domain: ".bilibili.com", path: "/", secure: false, session: true }
             ];
           }
           if (details.url === "https://v.douyin.com/") {
-            return [{ name: "s_v_web_id", value: "fresh" }];
+            return [{ name: "s_v_web_id", value: "fresh", domain: ".douyin.com", path: "/", secure: true, expirationDate: 1924992000 }];
           }
-          return [{ name: `cookie${cookieCallIndex}`, value: "demo" }];
+          return [{ name: `cookie${cookieCallIndex}`, value: "demo", domain: new URL(details.url).hostname, path: "/", secure: details.url.startsWith("https:") }];
         }
       }
     },
@@ -271,6 +271,7 @@ async function testCookiesAreOptIn() {
   const body = JSON.parse(resolveCall.options.body);
   assert(body.cookies.includes("SESSDATA=demo"), "resolve should send selected site cookies by default");
   assert(body.cookies.includes("bili_jct=csrf"), "resolve should include bilibili API-domain cookies");
+  assert(body.cookieDetails.some((item) => item.name === "SESSDATA" && item.domain === ".bilibili.com" && item.secure === true), "resolve should send structured bilibili cookies");
   assert(body.headers["User-Agent"] === "Chrome Test", "resolve should send browser headers");
   assert(body.headers.Referer === "https://www.bilibili.com/video/BV1demo/", "resolve should send referer");
   assert(env.elements.cookieInfo.textContent.includes("已读取 B站登录 Cookie"), "popup should show bilibili login cookie status");
@@ -331,6 +332,7 @@ async function testDouyinCookiesReadFreshCookieDomains() {
   const resolveCall = env.fetchCalls.find((call) => call.url.endsWith("/extension/videos/resolve"));
   const body = JSON.parse(resolveCall.options.body);
   assert(body.cookies.includes("s_v_web_id=fresh"), "resolve should include fresh Douyin visitor cookies");
+  assert(body.cookieDetails.some((item) => item.name === "s_v_web_id" && item.domain === ".douyin.com"), "resolve should send structured douyin cookies");
   assert(env.elements.cookieInfo.textContent.includes("已读取抖音 fresh Cookie"), "popup should show douyin fresh cookie status");
 }
 

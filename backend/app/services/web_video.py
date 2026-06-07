@@ -305,28 +305,69 @@ def _normalize_page_url(url: str) -> str:
     return url
 
 
-def _write_cookie_file(cookie: str) -> Optional[str]:
-    if not cookie:
-        return None
+def _safe_cookie_value(value: Any) -> str:
+    return str(value or "").replace("\r", "").replace("\n", "")
+
+
+def _cookie_expires_at(cookie: Dict[str, Any], default: str = "1893456000") -> str:
+    value = cookie.get("expirationDate") or cookie.get("expires") or cookie.get("expiry")
+    try:
+        if value:
+            return str(int(float(value)))
+    except Exception:
+        pass
+    return default
+
+
+def _write_cookie_file(cookie: str = "", cookie_details: Optional[List[Dict[str, Any]]] = None) -> Optional[str]:
     lines = ["# Netscape HTTP Cookie File"]
-    domains = [
-        ".bilibili.com",
-        ".douyin.com",
-        ".v.douyin.com",
-        ".iesdouyin.com",
-        ".snssdk.com",
-    ]
-    # Keep browser cookies valid for yt-dlp's cookie jar. A timestamp of 0 is
-    # session-cookie syntax in yt-dlp, but a future expiry is safer for other parsers.
-    expires_at = "1893456000"  # 2030-01-01
-    for item in cookie.split(";"):
-        if "=" not in item:
+    seen = set()
+
+    def add_line(domain: str, include_subdomains: bool, path: str, secure: bool, expires_at: str, name: str, value: str):
+        domain = _safe_cookie_value(domain).strip()
+        name = _safe_cookie_value(name).strip()
+        value = _safe_cookie_value(value)
+        path = _safe_cookie_value(path or "/") or "/"
+        if not domain or not name:
+            return
+        key = (domain, path, name, value)
+        if key in seen:
+            return
+        seen.add(key)
+        lines.append(
+            f"{domain}\t{'TRUE' if include_subdomains else 'FALSE'}\t{path}\t"
+            f"{'TRUE' if secure else 'FALSE'}\t{expires_at}\t{name}\t{value}"
+        )
+
+    for item in cookie_details or []:
+        domain = str(item.get("domain") or "").strip()
+        if not domain:
             continue
-        name, value = item.strip().split("=", 1)
-        if not name:
-            continue
-        for domain in domains:
-            lines.append(f"{domain}\tTRUE\t/\tFALSE\t{expires_at}\t{name}\t{value}")
+        add_line(
+            domain=domain,
+            include_subdomains=domain.startswith("."),
+            path=item.get("path") or "/",
+            secure=bool(item.get("secure")),
+            expires_at=_cookie_expires_at(item),
+            name=item.get("name") or "",
+            value=item.get("value") or "",
+        )
+
+    if cookie:
+        domains = [
+            ".bilibili.com",
+            ".douyin.com",
+            ".v.douyin.com",
+            ".iesdouyin.com",
+            ".snssdk.com",
+        ]
+        expires_at = "1893456000"  # 2030-01-01
+        for item in cookie.split(";"):
+            if "=" not in item:
+                continue
+            name, value = item.strip().split("=", 1)
+            for domain in domains:
+                add_line(domain, True, "/", False, expires_at, name, value)
 
     if len(lines) == 1:
         return None
@@ -339,8 +380,8 @@ def _write_cookie_file(cookie: str) -> Optional[str]:
 
 
 @contextmanager
-def _temporary_cookiefile(cookie: str):
-    cookie_file = _write_cookie_file(cookie or "")
+def _temporary_cookiefile(cookie: str = "", cookie_details: Optional[List[Dict[str, Any]]] = None):
+    cookie_file = _write_cookie_file(cookie or "", cookie_details=cookie_details)
     try:
         yield cookie_file
     finally:
@@ -470,13 +511,14 @@ def _info_to_candidates(info: Dict[str, Any], page_title: str, source_url: str,
 
 
 def _resolve_with_ytdlp(url: str, page_title: str = "", headers: Optional[Dict[str, str]] = None,
-                       cookie: Optional[str] = None, referer: Optional[str] = None,
+                       cookie: Optional[str] = None, cookie_details: Optional[List[Dict[str, Any]]] = None,
+                       referer: Optional[str] = None,
                        candidate_prefix: str = "yt") -> List[Dict[str, Any]]:
     import yt_dlp
 
     url = _normalize_page_url(url)
     options = _yt_dlp_options(headers=headers, cookie=cookie, referer=referer)
-    with _temporary_cookiefile(cookie or "") as cookie_file:
+    with _temporary_cookiefile(cookie or "", cookie_details=cookie_details) as cookie_file:
         if cookie_file:
             options["cookiefile"] = cookie_file
         with yt_dlp.YoutubeDL(options) as ydl:
@@ -485,7 +527,8 @@ def _resolve_with_ytdlp(url: str, page_title: str = "", headers: Optional[Dict[s
 
 
 def resolve_web_video(page_url: str, page_title: str = "", detected_streams: Optional[List[Dict[str, Any]]] = None,
-                      headers: Optional[Dict[str, str]] = None, cookie: Optional[str] = None) -> Dict[str, Any]:
+                      headers: Optional[Dict[str, str]] = None, cookie: Optional[str] = None,
+                      cookie_details: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     candidates = []
     errors = []
 
@@ -496,6 +539,7 @@ def resolve_web_video(page_url: str, page_title: str = "", detected_streams: Opt
                 page_title=page_title,
                 headers=headers,
                 cookie=cookie,
+                cookie_details=cookie_details,
                 candidate_prefix="yt",
             ))
         except Exception as exc:
@@ -519,6 +563,7 @@ def resolve_web_video(page_url: str, page_title: str = "", detected_streams: Opt
                     page_title=page_title,
                     headers=headers,
                     cookie=cookie,
+                    cookie_details=cookie_details,
                     referer=page_url,
                     candidate_prefix=stream_prefix,
                 )
@@ -573,6 +618,7 @@ def _download_with_ytdlp(job_id: str, payload: Dict[str, Any]) -> Path:
     if format_id == "detected":
         format_id = "best"
     cookie = payload.get("cookie") or payload.get("cookies")
+    cookie_details = payload.get("cookieDetails") or payload.get("cookie_details") or []
     headers = payload.get("headers") or {}
 
     def progress_hook(status: Dict[str, Any]):
@@ -594,7 +640,7 @@ def _download_with_ytdlp(job_id: str, payload: Dict[str, Any]) -> Path:
     })
 
     job_manager.update(job_id, status="downloading", progress=5, message="Resolving selected media")
-    with _temporary_cookiefile(cookie or "") as cookie_file:
+    with _temporary_cookiefile(cookie or "", cookie_details=cookie_details) as cookie_file:
         if cookie_file:
             options["cookiefile"] = cookie_file
         with yt_dlp.YoutubeDL(options) as ydl:

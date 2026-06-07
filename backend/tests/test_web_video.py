@@ -216,6 +216,36 @@ class WebVideoServiceTests(unittest.TestCase):
 
         self.assertFalse(path.exists())
 
+    def test_temporary_cookiefile_preserves_structured_cookie_metadata(self):
+        with web_video._temporary_cookiefile(
+            "",
+            cookie_details=[
+                {
+                    "name": "SESSDATA",
+                    "value": "demo",
+                    "domain": ".bilibili.com",
+                    "path": "/",
+                    "secure": True,
+                    "expirationDate": 1924992000,
+                },
+                {
+                    "name": "s_v_web_id",
+                    "value": "fresh",
+                    "domain": ".douyin.com",
+                    "path": "/",
+                    "secure": True,
+                    "expirationDate": 1924992000,
+                },
+            ],
+        ) as cookie_file:
+            path = Path(cookie_file)
+            content = path.read_text(encoding="utf-8")
+
+            self.assertIn(".bilibili.com\tTRUE\t/\tTRUE\t1924992000\tSESSDATA\tdemo", content)
+            self.assertIn(".douyin.com\tTRUE\t/\tTRUE\t1924992000\ts_v_web_id\tfresh", content)
+
+        self.assertFalse(path.exists())
+
     def test_resolve_passes_cookiefile_to_ytdlp_and_removes_it(self):
         seen = {}
 
@@ -223,6 +253,7 @@ class WebVideoServiceTests(unittest.TestCase):
             def __init__(self, options):
                 seen["cookiefile"] = options.get("cookiefile")
                 seen["cookiefile_exists"] = Path(seen["cookiefile"]).exists()
+                seen["cookiefile_content"] = Path(seen["cookiefile"]).read_text(encoding="utf-8")
 
             def __enter__(self):
                 return self
@@ -242,10 +273,19 @@ class WebVideoServiceTests(unittest.TestCase):
             result = web_video.resolve_web_video(
                 page_url="https://m.douyin.com/video/123456",
                 cookie="SESSDATA=demo; msToken=abc",
+                cookie_details=[{
+                    "name": "s_v_web_id",
+                    "value": "fresh",
+                    "domain": ".douyin.com",
+                    "path": "/",
+                    "secure": True,
+                    "expirationDate": 1924992000,
+                }],
             )
 
         self.assertEqual(seen["url"], "https://www.douyin.com/video/123456")
         self.assertTrue(seen["cookiefile_exists"])
+        self.assertIn(".douyin.com\tTRUE\t/\tTRUE\t1924992000\ts_v_web_id\tfresh", seen["cookiefile_content"])
         self.assertFalse(Path(seen["cookiefile"]).exists())
         self.assertEqual(result["candidates"][0]["formats"][0]["formatId"], "1080")
 
@@ -259,6 +299,7 @@ class WebVideoServiceTests(unittest.TestCase):
                     seen["cookiefile"] = options.get("cookiefile")
                     seen["format"] = options.get("format")
                     seen["cookiefile_exists"] = Path(seen["cookiefile"]).exists()
+                    seen["cookiefile_content"] = Path(seen["cookiefile"]).read_text(encoding="utf-8")
 
                 def __enter__(self):
                     return self
@@ -277,12 +318,21 @@ class WebVideoServiceTests(unittest.TestCase):
                     "candidateUrl": "https://www.bilibili.com/video/BV1demo/",
                     "formatId": "116+ba/best",
                     "cookies": "SESSDATA=demo",
+                    "cookieDetails": [{
+                        "name": "SESSDATA",
+                        "value": "demo",
+                        "domain": ".bilibili.com",
+                        "path": "/",
+                        "secure": True,
+                        "expirationDate": 1924992000,
+                    }],
                 })
 
             self.assertEqual(path.name, "web_job-1.mp4")
             self.assertEqual(seen["urls"], ["https://www.bilibili.com/video/BV1demo/"])
             self.assertEqual(seen["format"], "116+ba/best")
             self.assertTrue(seen["cookiefile_exists"])
+            self.assertIn(".bilibili.com\tTRUE\t/\tTRUE\t1924992000\tSESSDATA\tdemo", seen["cookiefile_content"])
             self.assertFalse(Path(seen["cookiefile"]).exists())
 
     def test_normalize_douyin_share_url(self):

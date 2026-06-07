@@ -25,12 +25,23 @@ class DetectedStream(BaseModel):
     isBlob: Optional[bool] = False
 
 
+class BrowserCookie(BaseModel):
+    name: str
+    value: str
+    domain: Optional[str] = None
+    path: Optional[str] = "/"
+    secure: Optional[bool] = False
+    expirationDate: Optional[float] = None
+    session: Optional[bool] = None
+
+
 class ResolveRequest(BaseModel):
     pageUrl: str
     pageTitle: Optional[str] = ""
     detectedStreams: List[DetectedStream] = Field(default_factory=list)
     headers: Dict[str, str] = Field(default_factory=dict)
     cookies: Optional[str] = None
+    cookieDetails: List[BrowserCookie] = Field(default_factory=list)
 
 
 class ImportRequest(ResolveRequest):
@@ -64,6 +75,7 @@ async def resolve_videos(payload: ResolveRequest, _: None = Depends(verify_bridg
         detected_streams=[item.model_dump() for item in payload.detectedStreams],
         headers=payload.headers,
         cookie=payload.cookies,
+        cookie_details=[item.model_dump() for item in payload.cookieDetails],
     )
     return R.success(result)
 
