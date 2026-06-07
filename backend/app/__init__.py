@@ -6,7 +6,7 @@ def create_app(lifespan=None) -> FastAPI:
     app = FastAPI(
         title="Video AI Note",
         description="简化版视频笔记生成工具",
-        version="1.1.0",
+        version="1.1.1",
         lifespan=lifespan
     )
     
