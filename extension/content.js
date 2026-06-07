@@ -1,4 +1,5 @@
-const MEDIA_PATTERN = /\.(m3u8|mpd|mp4|webm|m4v|mov|mkv|flv|m4s|ts|aac|m4a)(\?|#|$)/i;
+const MEDIA_PATTERN = /(\.(m3u8|mpd|mp4|webm|m4v|mov|mkv|flv|m4s|ts|aac|m4a)(\?|#|$)|\/aweme\/v\d+\/play\/|\/aweme\/v1\/play\/|\/video\/tos\/)/i;
+const EMBEDDED_URL_PATTERN = /https?:\\?\/\\?\/[^"'<>\s]+/gi;
 let pickerActive = false;
 let pickerHighlight = null;
 let pickerHint = null;
@@ -70,6 +71,13 @@ function collectVideoStreams() {
         isFragment: isFragmentUrl(url)
       });
     }
+  }
+
+  for (const url of collectEmbeddedMediaUrls()) {
+    add(url, {
+      label: labelFromUrl(url),
+      source: "script"
+    });
   }
 
   return { streams, videoCount };
@@ -259,6 +267,48 @@ function selectedPayload(element) {
   };
 }
 
+function pageRequestHeaders() {
+  const languages = Array.isArray(navigator.languages) && navigator.languages.length
+    ? navigator.languages.join(",")
+    : navigator.language || "";
+  return {
+    "User-Agent": navigator.userAgent || "",
+    "Accept-Language": languages,
+    "Referer": location.href,
+    "Origin": location.origin
+  };
+}
+
+function cleanEmbeddedUrl(rawUrl) {
+  if (!rawUrl) return "";
+  let url = rawUrl
+    .replace(/\\u002[fF]/g, "/")
+    .replace(/\\\//g, "/")
+    .replace(/&amp;/g, "&");
+  try {
+    url = decodeURIComponent(url);
+  } catch (_) {
+    // Keep the original URL if it contains intentionally escaped query params.
+  }
+  return MEDIA_PATTERN.test(url) ? url : "";
+}
+
+function collectEmbeddedMediaUrls() {
+  const urls = [];
+  const seen = new Set();
+  for (const script of document.scripts || []) {
+    const text = script.textContent || "";
+    if (!/(douyin|aweme|play_addr|video_id|m3u8|mp4|video\/tos)/i.test(text)) continue;
+    for (const match of text.matchAll(EMBEDDED_URL_PATTERN)) {
+      const url = cleanEmbeddedUrl(match[0]);
+      if (!url || seen.has(url)) continue;
+      seen.add(url);
+      urls.push(url);
+    }
+  }
+  return urls.slice(0, 20);
+}
+
 function handlePickerMouseMove(event) {
   if (!pickerActive) return;
   updatePickerHighlight(event.target);
@@ -331,6 +381,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({
       pageTitle: document.title,
       pageUrl: location.href,
+      headers: pageRequestHeaders(),
       streams: result.streams,
       videoCount: result.videoCount
     });

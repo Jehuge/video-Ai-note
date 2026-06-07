@@ -57,11 +57,24 @@ const context = {
   URL,
   Date,
   setTimeout() {},
-  location: { href: "https://site.example.test/watch" },
+  navigator: {
+    userAgent: "Chrome Test",
+    languages: ["zh-CN", "en"],
+    language: "zh-CN"
+  },
+  location: {
+    href: "https://site.example.test/watch",
+    origin: "https://site.example.test"
+  },
   document: {
     title: "Picker demo",
     documentElement,
     body,
+    scripts: [
+      {
+        textContent: 'window.__DATA__={"play_addr":{"url_list":["https:\\/\\/www.douyin.com\\/aweme\\/v1\\/play\\/?video_id=abc"]}}'
+      }
+    ],
     createElement: (tag) => createElement(tag),
     querySelector: () => iframe,
     querySelectorAll: () => [],
@@ -109,5 +122,16 @@ assert(selected, "selected video message should be sent");
 assert(selected.pageUrl === "https://player.example.test/embed/abc", "iframe src should become selected page url");
 assert(selected.sourceUrl === "https://player.example.test/embed/abc", "iframe source url should be preserved");
 assert(selected.streams[0].url === "https://player.example.test/embed/abc", "iframe src should be sent as selected stream");
+
+let scanResponse = null;
+listeners.message({ type: "SCAN_PAGE_VIDEOS" }, null, (value) => {
+  scanResponse = value;
+});
+assert(scanResponse.headers["User-Agent"] === "Chrome Test", "scan should include browser user agent");
+assert(scanResponse.headers.Referer === "https://site.example.test/watch", "scan should include referer");
+assert(
+  scanResponse.streams.some((stream) => stream.url.includes("/aweme/v1/play/?video_id=abc")),
+  "scan should collect embedded Douyin play URLs"
+);
 
 console.log("extension content picker tests passed");

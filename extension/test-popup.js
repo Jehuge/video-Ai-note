@@ -41,7 +41,7 @@ function runPopupTest({
   pageScan,
   appReady = true,
   resolveResponse,
-  cookiesChecked = false,
+  cookiesChecked = true,
   backgroundSelection = null,
   jobResponse = { status: "completed", progress: 100 }
 }) {
@@ -49,7 +49,7 @@ function runPopupTest({
   for (const id of ["status", "pick", "refresh", "candidate", "format", "noteStyle", "screenshot", "cookies", "autoRun", "send", "empty", "progress", "bar", "progressText"]) {
     elements[id] = createElement(id);
   }
-  elements.cookies.checked = cookiesChecked;
+  elements.cookies.checked = cookiesChecked !== false;
   elements.autoRun.checked = true;
   elements.noteStyle.options = [
     { value: "simple" },
@@ -64,6 +64,7 @@ function runPopupTest({
   const timers = [];
   let intervalCallback = null;
   let clearIntervalCalls = 0;
+  let cookieCallIndex = 0;
 
   const context = {
     console,
@@ -114,7 +115,14 @@ function runPopupTest({
       cookies: {
         getAll: async (details) => {
           cookieCalls.push(details);
-          return [{ name: "SESSDATA", value: "demo" }];
+          cookieCallIndex += 1;
+          if (details.url === "https://api.bilibili.com/") {
+            return [
+              { name: "SESSDATA", value: "demo" },
+              { name: "bili_jct", value: "csrf" }
+            ];
+          }
+          return [{ name: `cookie${cookieCallIndex}`, value: "demo" }];
         }
       }
     },
@@ -212,7 +220,35 @@ async function testAppOfflineDisablesSend() {
 
 async function testCookiesAreOptIn() {
   const env = runPopupTest({
-    cookiesChecked: true,
+    pageScan: {
+      pageUrl: "https://www.bilibili.com/video/BV1demo/",
+      pageTitle: "Bilibili demo",
+      headers: {
+        "User-Agent": "Chrome Test",
+        "Accept-Language": "zh-CN",
+        Referer: "https://www.bilibili.com/video/BV1demo/"
+      },
+      videoCount: 1,
+      streams: []
+    },
+    resolveResponse: []
+  });
+
+  await env.context.__initialRefresh;
+
+  assert(env.cookieCalls.some((call) => call.url === "https://api.bilibili.com/"), "bilibili API cookies should be read when enabled");
+  const resolveCall = env.fetchCalls.find((call) => call.url.endsWith("/extension/videos/resolve"));
+  assert(resolveCall, "resolve call should be made");
+  const body = JSON.parse(resolveCall.options.body);
+  assert(body.cookies.includes("SESSDATA=demo"), "resolve should send selected site cookies by default");
+  assert(body.cookies.includes("bili_jct=csrf"), "resolve should include bilibili API-domain cookies");
+  assert(body.headers["User-Agent"] === "Chrome Test", "resolve should send browser headers");
+  assert(body.headers.Referer === "https://www.bilibili.com/video/BV1demo/", "resolve should send referer");
+}
+
+async function testCookiesCanBeDisabled() {
+  const env = runPopupTest({
+    cookiesChecked: false,
     pageScan: {
       pageUrl: "https://www.bilibili.com/video/BV1demo/",
       pageTitle: "Bilibili demo",
@@ -224,10 +260,9 @@ async function testCookiesAreOptIn() {
 
   await env.context.__initialRefresh;
 
-  assert(env.cookieCalls.length === 1, "cookies should be read during resolve only when checked");
+  assert(env.cookieCalls.length === 0, "cookies should not be read when unchecked");
   const resolveCall = env.fetchCalls.find((call) => call.url.endsWith("/extension/videos/resolve"));
-  assert(resolveCall, "resolve call should be made");
-  assert(JSON.parse(resolveCall.options.body).cookies === "SESSDATA=demo", "resolve should send selected site cookies");
+  assert(JSON.parse(resolveCall.options.body).cookies === "", "resolve should not send cookies when disabled");
 }
 
 async function testImportSendsCandidateUrl() {
@@ -388,6 +423,7 @@ async function testCanceledJobStopsPolling() {
   await testPageFallbackWhenResolveIsSlow();
   await testAppOfflineDisablesSend();
   await testCookiesAreOptIn();
+  await testCookiesCanBeDisabled();
   await testImportSendsCandidateUrl();
   await testImportSendsSelectedNoteStyle();
   await testFragmentsAreFilteredBeforeResolve();

@@ -202,6 +202,93 @@ class WebVideoServiceTests(unittest.TestCase):
         self.assertEqual(options["http_headers"]["Cookie"], "SESSDATA=demo")
         self.assertEqual(options["http_headers"]["Accept-Language"], "zh-CN")
         self.assertNotEqual(options["http_headers"]["Cookie"], "ignored=1")
+        self.assertNotIn("cookiefile", options)
+
+    def test_temporary_cookiefile_writes_browser_cookie_for_supported_sites(self):
+        with web_video._temporary_cookiefile("SESSDATA=demo; msToken=abc") as cookie_file:
+            path = Path(cookie_file)
+            content = path.read_text(encoding="utf-8")
+
+            self.assertTrue(path.exists())
+            self.assertIn(".bilibili.com\tTRUE\t/\tFALSE\t0\tSESSDATA\tdemo", content)
+            self.assertIn(".douyin.com\tTRUE\t/\tFALSE\t0\tmsToken\tabc", content)
+
+        self.assertFalse(path.exists())
+
+    def test_resolve_passes_cookiefile_to_ytdlp_and_removes_it(self):
+        seen = {}
+
+        class FakeYoutubeDL:
+            def __init__(self, options):
+                seen["cookiefile"] = options.get("cookiefile")
+                seen["cookiefile_exists"] = Path(seen["cookiefile"]).exists()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def extract_info(self, url, **_kwargs):
+                seen["url"] = url
+                return {
+                    "title": "Resolved",
+                    "webpage_url": url,
+                    "formats": [{"format_id": "1080", "height": 1080, "ext": "mp4"}],
+                }
+
+        with mock.patch.dict(sys.modules, {"yt_dlp": types.SimpleNamespace(YoutubeDL=FakeYoutubeDL)}):
+            result = web_video.resolve_web_video(
+                page_url="https://m.douyin.com/video/123456",
+                cookie="SESSDATA=demo; msToken=abc",
+            )
+
+        self.assertEqual(seen["url"], "https://www.douyin.com/video/123456")
+        self.assertTrue(seen["cookiefile_exists"])
+        self.assertFalse(Path(seen["cookiefile"]).exists())
+        self.assertEqual(result["candidates"][0]["formats"][0]["formatId"], "1080")
+
+    def test_download_passes_cookiefile_to_ytdlp_and_removes_it(self):
+        with TemporaryDirectory() as tmp:
+            upload_dir = Path(tmp)
+            seen = {}
+
+            class FakeYoutubeDL:
+                def __init__(self, options):
+                    seen["cookiefile"] = options.get("cookiefile")
+                    seen["format"] = options.get("format")
+                    seen["cookiefile_exists"] = Path(seen["cookiefile"]).exists()
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *_args):
+                    return False
+
+                def download(self, urls):
+                    seen["urls"] = urls
+                    (upload_dir / "web_job-1.mp4").write_bytes(b"video")
+
+            with mock.patch.object(web_video, "UPLOAD_DIR", upload_dir), \
+                    mock.patch.dict(sys.modules, {"yt_dlp": types.SimpleNamespace(YoutubeDL=FakeYoutubeDL)}):
+                path = web_video._download_with_ytdlp("job-1", {
+                    "pageUrl": "https://www.bilibili.com/video/BV1demo/",
+                    "candidateUrl": "https://www.bilibili.com/video/BV1demo/",
+                    "formatId": "116+ba/best",
+                    "cookies": "SESSDATA=demo",
+                })
+
+            self.assertEqual(path.name, "web_job-1.mp4")
+            self.assertEqual(seen["urls"], ["https://www.bilibili.com/video/BV1demo/"])
+            self.assertEqual(seen["format"], "116+ba/best")
+            self.assertTrue(seen["cookiefile_exists"])
+            self.assertFalse(Path(seen["cookiefile"]).exists())
+
+    def test_normalize_douyin_share_url(self):
+        self.assertEqual(
+            web_video._normalize_page_url("https://www.douyin.com/share/video/123456/?foo=bar"),
+            "https://www.douyin.com/video/123456",
+        )
 
     def test_import_request_preserves_candidate_url(self):
         payload = ImportRequest(

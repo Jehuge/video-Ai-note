@@ -1,4 +1,4 @@
-const MEDIA_PATTERN = /\.(m3u8|mpd|mp4|webm|m4v|mov|mkv|flv|m4s|ts|aac|m4a)(\?|#|$)/i;
+const MEDIA_PATTERN = /(\.(m3u8|mpd|mp4|webm|m4v|mov|mkv|flv|m4s|ts|aac|m4a)(\?|#|$)|\/aweme\/v\d+\/play\/|\/aweme\/v1\/play\/|\/video\/tos\/)/i;
 const STREAMS_BY_TAB = new Map();
 const SELECTION_BY_TAB = new Map();
 const MAX_STREAMS = 80;
@@ -33,7 +33,11 @@ function labelFromUrl(url, mimeType = "") {
   } catch (_) {
     // ignore URL parsing issues
   }
-  return mimeType || "Media stream";
+  const lowerMime = String(mimeType || "").toLowerCase();
+  if (lowerMime.includes("video") || lowerMime.includes("audio") || lowerMime.includes("mpegurl") || lowerMime.includes("dash")) {
+    return mimeType;
+  }
+  return "Media stream";
 }
 
 function isFragmentUrl(url) {

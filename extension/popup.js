@@ -7,6 +7,7 @@ const state = {
   token: "",
   pageUrl: "",
   pageTitle: "",
+  pageHeaders: {},
   detectedStreams: [],
   selectedVideo: null,
   candidates: [],
@@ -70,17 +71,46 @@ async function saveNoteStyle() {
   await chrome.storage.local.set({ [NOTE_STYLE_STORAGE_KEY]: els.noteStyle.value || "simple" });
 }
 
-async function collectSiteCookies() {
-  if (!els.cookies.checked || !/^https?:\/\//i.test(state.pageUrl || "")) return "";
+function cookieProbeUrls(pageUrl) {
+  const urls = [];
   try {
-    const cookies = await chrome.cookies.getAll({ url: state.pageUrl });
-    return cookies
-      .filter((item) => item.name && typeof item.value === "string")
-      .map((item) => `${item.name}=${item.value}`)
-      .join("; ");
+    const parsed = new URL(pageUrl);
+    urls.push(parsed.href);
+    const host = parsed.hostname.toLowerCase();
+    if (host.endsWith("bilibili.com")) {
+      urls.push("https://www.bilibili.com/", "https://api.bilibili.com/");
+    }
+    if (host.endsWith("douyin.com")) {
+      urls.push("https://www.douyin.com/");
+    }
+    if (host.endsWith("iesdouyin.com")) {
+      urls.push("https://www.iesdouyin.com/");
+    }
+  } catch (_) {
+    return urls;
+  }
+  return [...new Set(urls)];
+}
+
+async function collectSiteCookies() {
+  if (els.cookies && els.cookies.checked === false) return "";
+  if (!/^https?:\/\//i.test(state.pageUrl || "")) return "";
+  const cookieMap = new Map();
+  try {
+    for (const url of cookieProbeUrls(state.pageUrl)) {
+      const cookies = await chrome.cookies.getAll({ url });
+      for (const item of cookies) {
+        if (item.name && typeof item.value === "string") {
+          cookieMap.set(item.name, item.value);
+        }
+      }
+    }
   } catch (_) {
     return "";
   }
+  return [...cookieMap.entries()]
+    .map(([name, value]) => `${name}=${value}`)
+    .join("; ");
 }
 
 async function appFetch(path, options = {}) {
@@ -160,6 +190,10 @@ async function collectPageStreams() {
   state.videoCount = Math.max(pageScan?.videoCount || 0, state.selectedVideo?.videoCount || 0);
   state.pageTitle = state.selectedVideo?.pageTitle || pageScan?.pageTitle || state.pageTitle;
   state.pageUrl = state.selectedVideo?.pageUrl || pageScan?.pageUrl || state.pageUrl;
+  state.pageHeaders = {
+    ...(pageScan?.headers || {}),
+    Referer: state.pageUrl
+  };
 }
 
 function canUsePageResolver() {
@@ -220,6 +254,7 @@ async function resolveVideos() {
       pageUrl: state.pageUrl,
       pageTitle: state.pageTitle,
       detectedStreams: streamsToResolve,
+      headers: state.pageHeaders,
       cookies
     })
   });
@@ -288,6 +323,7 @@ async function importSelected() {
       pageUrl: state.pageUrl,
       pageTitle: state.pageTitle,
       detectedStreams: selectedStreams.length ? selectedStreams : state.detectedStreams,
+      headers: state.pageHeaders,
       candidateId: candidate.id,
       candidateUrl: candidate.sourceUrl,
       formatId: els.format.value,

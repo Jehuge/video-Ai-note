@@ -1,12 +1,14 @@
 import os
 import re
 import shutil
+import tempfile
 import threading
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from app.db.video_task_dao import create_task, get_task_by_id, update_task_status
 from app.services.model_settings import load_active_model_config
@@ -31,6 +33,8 @@ DEFAULT_BROWSER_HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/125.0.0.0 Safari/537.36"
     ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
 }
 NOTE_STYLES = {"simple", "detailed", "academic", "creative"}
 TERMINAL_JOB_STATUSES = {"completed", "failed", "canceled", "cancelled"}
@@ -285,6 +289,64 @@ def _download_format_id(fmt: Dict[str, Any]) -> str:
     return format_id
 
 
+def _normalize_page_url(url: str) -> str:
+    parsed = urlparse(url or "")
+    if not parsed.scheme or not parsed.netloc:
+        return url
+    host = parsed.netloc.lower()
+    if host in {"v.douyin.com", "www.iesdouyin.com"}:
+        return url
+    if host.endswith("douyin.com") and parsed.path.startswith("/share/video/"):
+        video_id = parsed.path.rstrip("/").split("/")[-1]
+        if video_id:
+            return f"https://www.douyin.com/video/{video_id}"
+    if host in {"m.douyin.com", "www.douyin.com"} and parsed.path.startswith("/video/"):
+        return urlunparse(("https", "www.douyin.com", parsed.path, "", parsed.query, ""))
+    return url
+
+
+def _write_cookie_file(cookie: str) -> Optional[str]:
+    if not cookie:
+        return None
+    lines = ["# Netscape HTTP Cookie File"]
+    domains = [
+        ".bilibili.com",
+        ".douyin.com",
+        ".iesdouyin.com",
+        ".snssdk.com",
+    ]
+    for item in cookie.split(";"):
+        if "=" not in item:
+            continue
+        name, value = item.strip().split("=", 1)
+        if not name:
+            continue
+        for domain in domains:
+            lines.append(f"{domain}\tTRUE\t/\tFALSE\t0\t{name}\t{value}")
+
+    if len(lines) == 1:
+        return None
+
+    handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".cookies.txt")
+    with handle:
+        handle.write("\n".join(lines))
+        handle.write("\n")
+    return handle.name
+
+
+@contextmanager
+def _temporary_cookiefile(cookie: str):
+    cookie_file = _write_cookie_file(cookie or "")
+    try:
+        yield cookie_file
+    finally:
+        if cookie_file:
+            try:
+                Path(cookie_file).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
 def _yt_dlp_options(headers: Optional[Dict[str, str]] = None, cookie: Optional[str] = None,
                     referer: Optional[str] = None) -> Dict[str, Any]:
     http_headers = dict(DEFAULT_BROWSER_HEADERS)
@@ -309,6 +371,11 @@ def _yt_dlp_options(headers: Optional[Dict[str, str]] = None, cookie: Optional[s
         "fragment_retries": 3,
         "retries": 3,
         "http_headers": http_headers,
+        "extractor_args": {
+            "bilibili": {
+                "prefer_multi_flv": ["1"],
+            },
+        },
     }
 
     try:
@@ -403,9 +470,13 @@ def _resolve_with_ytdlp(url: str, page_title: str = "", headers: Optional[Dict[s
                        candidate_prefix: str = "yt") -> List[Dict[str, Any]]:
     import yt_dlp
 
+    url = _normalize_page_url(url)
     options = _yt_dlp_options(headers=headers, cookie=cookie, referer=referer)
-    with yt_dlp.YoutubeDL(options) as ydl:
-        info = ydl.extract_info(url, download=False)
+    with _temporary_cookiefile(cookie or "") as cookie_file:
+        if cookie_file:
+            options["cookiefile"] = cookie_file
+        with yt_dlp.YoutubeDL(options) as ydl:
+            info = ydl.extract_info(url, download=False)
     return _info_to_candidates(info, page_title=page_title, source_url=url, candidate_prefix=candidate_prefix)
 
 
@@ -417,7 +488,7 @@ def resolve_web_video(page_url: str, page_title: str = "", detected_streams: Opt
     if page_url:
         try:
             candidates.extend(_resolve_with_ytdlp(
-                page_url,
+                _normalize_page_url(page_url),
                 page_title=page_title,
                 headers=headers,
                 cookie=cookie,
@@ -477,12 +548,12 @@ def start_import_job(payload: Dict[str, Any]) -> WebVideoJob:
 def _choose_download_url(payload: Dict[str, Any]) -> str:
     candidate_url = payload.get("candidateUrl") or payload.get("candidate_url")
     if candidate_url and not str(candidate_url).startswith("blob:"):
-        return candidate_url
+        return _normalize_page_url(str(candidate_url))
     candidate_id = payload.get("candidateId") or payload.get("candidate_id")
     for candidate in _normalize_detected_streams(payload.get("detectedStreams") or [], payload.get("pageTitle") or ""):
         if candidate["id"] == candidate_id:
             return candidate["sourceUrl"]
-    return payload.get("pageUrl") or payload.get("page_url") or ""
+    return _normalize_page_url(payload.get("pageUrl") or payload.get("page_url") or "")
 
 
 def _download_with_ytdlp(job_id: str, payload: Dict[str, Any]) -> Path:
@@ -519,8 +590,11 @@ def _download_with_ytdlp(job_id: str, payload: Dict[str, Any]) -> Path:
     })
 
     job_manager.update(job_id, status="downloading", progress=5, message="Resolving selected media")
-    with yt_dlp.YoutubeDL(options) as ydl:
-        ydl.download([url])
+    with _temporary_cookiefile(cookie or "") as cookie_file:
+        if cookie_file:
+            options["cookiefile"] = cookie_file
+        with yt_dlp.YoutubeDL(options) as ydl:
+            ydl.download([url])
 
     matches = sorted(UPLOAD_DIR.glob(f"{job_prefix}.*"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not matches:
