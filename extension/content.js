@@ -491,6 +491,11 @@ function pickDouyinAwemeDetails() {
         if (Array.isArray(item?.aweme_details)) {
           for (const detail of item.aweme_details) add(detail);
         }
+        for (const key of ["awemeList", "aweme_list", "itemList", "item_list", "videoList", "video_list"]) {
+          if (Array.isArray(item?.[key])) {
+            for (const detail of item[key]) add(detail);
+          }
+        }
         if (item?.itemStruct) add(item.itemStruct);
         if (item?.video && (item.aweme_id || item.id || item.desc)) add(item);
       });

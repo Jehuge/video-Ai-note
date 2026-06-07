@@ -677,36 +677,47 @@ class WebVideoServiceTests(unittest.TestCase):
             self.assertIn(".bilibili.com\tTRUE\t/\tTRUE\t1924992000\tSESSDATA\tdemo", seen["cookiefile_content"])
             self.assertFalse(Path(seen["cookiefile"]).exists())
 
-    def test_download_maps_douyin_page_data_format_to_best(self):
+    def test_run_import_job_downloads_douyin_page_data_directly(self):
         with TemporaryDirectory() as tmp:
-            upload_dir = Path(tmp)
+            tmp_path = Path(tmp)
+            upload_dir = tmp_path / "uploads"
+            output_dir = tmp_path / "notes"
+            upload_dir.mkdir()
+            output_dir.mkdir()
             seen = {}
 
-            class FakeYoutubeDL:
-                def __init__(self, options):
-                    seen["format"] = options.get("format")
-
-                def __enter__(self):
-                    return self
-
-                def __exit__(self, *_args):
-                    return False
-
-                def download(self, urls):
-                    seen["urls"] = urls
-                    (upload_dir / "web_job-1.mp4").write_bytes(b"video")
+            def fake_download_direct(url, target_path, headers, job_id, label):
+                seen["url"] = url
+                seen["headers"] = headers
+                seen["label"] = label
+                target_path.write_bytes(b"video")
+                return target_path
 
             with mock.patch.object(web_video, "UPLOAD_DIR", upload_dir), \
-                    mock.patch.dict(sys.modules, {"yt_dlp": types.SimpleNamespace(YoutubeDL=FakeYoutubeDL)}):
-                path = web_video._download_with_ytdlp("job-1", {
+                    mock.patch.object(web_video, "NOTE_OUTPUT_DIR", output_dir), \
+                    mock.patch.object(web_video, "_download_direct_url", side_effect=fake_download_direct), \
+                    mock.patch.object(web_video, "_download_with_ytdlp", side_effect=AssertionError("yt-dlp should not run")), \
+                    mock.patch.object(web_video, "load_active_model_config", return_value={}), \
+                    mock.patch.object(web_video, "create_task"):
+                job = web_video.job_manager.create("https://www.douyin.com/video/123456")
+                web_video._run_import_job(job.job_id, {
                     "pageUrl": "https://www.douyin.com/video/123456",
+                    "pageTitle": "Douyin",
                     "candidateUrl": "https://v3-dy-o.douyinvod.com/tos-cn-ve-15/demo/video",
                     "formatId": "douyin-page-data",
+                    "cookies": "s_v_web_id=fresh",
+                    "headers": {"Accept-Language": "zh-CN"},
+                    "autoRun": False,
                 })
 
-            self.assertEqual(path.name, "web_job-1.mp4")
-            self.assertEqual(seen["urls"], ["https://v3-dy-o.douyinvod.com/tos-cn-ve-15/demo/video"])
-            self.assertEqual(seen["format"], "best")
+            updated = web_video.job_manager.get(job.job_id)
+            self.assertEqual(updated.status, "completed")
+            self.assertEqual(seen["url"], "https://v3-dy-o.douyinvod.com/tos-cn-ve-15/demo/video")
+            self.assertEqual(seen["headers"]["Cookie"], "s_v_web_id=fresh")
+            self.assertEqual(seen["headers"]["Referer"], "https://www.douyin.com/video/123456")
+            self.assertEqual(seen["headers"]["Accept-Language"], "zh-CN")
+            self.assertEqual(seen["label"], "Downloading selected Douyin media")
+            self.assertTrue(list(upload_dir.glob(f"{updated.task_id}.mp4")))
 
     def test_run_import_job_uses_bilibili_playinfo_downloader(self):
         with TemporaryDirectory() as tmp:

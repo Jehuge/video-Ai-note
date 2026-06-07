@@ -238,7 +238,28 @@ function testDouyinUniversalPageData() {
   );
 }
 
+function testDouyinAwemeListPageData() {
+  const env = runContentTest({
+    location: {
+      href: "https://www.douyin.com/video/7380000000000000001",
+      origin: "https://www.douyin.com",
+      hostname: "www.douyin.com"
+    },
+    scripts: [
+      'window.__INITIAL_STATE__={"awemeList":[{"aweme_id":"7380000000000000001","desc":"list demo","video":{"height":720,"width":1280,"play_addr":{"url_list":["https:\\/\\/v3-dy-o.douyinvod.com\\/tos-cn-ve-15\\/list-demo\\/play?mime_type=video_mp4"]}}}]}'
+    ]
+  });
+
+  const scanResponse = scanPage(env.listeners);
+  const stream = scanResponse.streams.find((item) => item.source === "douyin-page-data");
+  assert(stream, "scan should collect Douyin awemeList page-data stream");
+  assert(stream.url.includes("/list-demo/play"), "awemeList stream URL should be preserved");
+  assert(stream.height === 720, "awemeList stream should preserve video height");
+  assert(stream.isDouyinPageData === true, "awemeList stream should be marked as Douyin page data");
+}
+
 testPickerAndBilibiliPlayInfo();
 testDouyinUniversalPageData();
+testDouyinAwemeListPageData();
 
 console.log("extension content picker tests passed");

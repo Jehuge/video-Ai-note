@@ -1157,6 +1157,24 @@ def _download_direct_url(url: str, target_path: Path, headers: Dict[str, str], j
     return target_path
 
 
+def _download_selected_direct_media(job_id: str, payload: Dict[str, Any], suffix: str = ".mp4") -> Path:
+    url = _choose_download_url(payload)
+    if not url:
+        raise ValueError("No direct media URL was provided")
+
+    headers = dict(DEFAULT_BROWSER_HEADERS)
+    headers.update({k: v for k, v in (payload.get("headers") or {}).items() if v and k.lower() not in {"cookie", "set-cookie"}})
+    if payload.get("cookies"):
+        headers["Cookie"] = payload.get("cookies")
+    if payload.get("pageUrl") or payload.get("page_url"):
+        headers["Referer"] = payload.get("pageUrl") or payload.get("page_url")
+
+    parsed_suffix = _stream_suffix(url)
+    output_suffix = parsed_suffix if parsed_suffix in MEDIA_EXTENSIONS and parsed_suffix not in {".ts", ".aac"} else suffix
+    output_path = UPLOAD_DIR / f"web_{job_id}{output_suffix}"
+    return _download_direct_url(url, output_path, headers, job_id, "Downloading selected Douyin media")
+
+
 def _merge_video_audio(video_path: Path, audio_path: Path, output_path: Path, job_id: str) -> Path:
     ffmpeg = get_ffmpeg_path()
     job_manager.update(job_id, status="downloading", progress=85, message="Merging video and audio")
@@ -1256,6 +1274,8 @@ def _run_import_job(job_id: str, payload: Dict[str, Any]) -> None:
         format_id = str(payload.get("formatId") or payload.get("format_id") or "")
         if format_id == "bilibili-playinfo" or format_id.startswith("bilibili-api"):
             downloaded_path = _download_bilibili_playinfo(job_id, payload)
+        elif format_id == "douyin-page-data":
+            downloaded_path = _download_selected_direct_media(job_id, payload)
         else:
             downloaded_path = _download_with_ytdlp(job_id, payload)
         job_manager.update(job_id, status="imported", progress=92, message="Creating AInote task")
