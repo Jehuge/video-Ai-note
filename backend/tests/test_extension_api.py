@@ -108,6 +108,35 @@ class ExtensionApiTests(unittest.TestCase):
         data = response.json()["data"]
         self.assertEqual(data["candidates"][0]["formats"][0]["protocol"], "m3u8")
 
+    def test_resolve_preserves_douyin_page_data_marker(self):
+        body = {
+            "pageUrl": "https://www.douyin.com/video/123456",
+            "pageTitle": "Douyin",
+            "detectedStreams": [
+                {
+                    "url": "https://v3-dy-o.douyinvod.com/tos-cn-ve-15/demo/video",
+                    "source": "douyin-page-data",
+                    "isDouyinPageData": True,
+                }
+            ],
+        }
+
+        seen = {}
+
+        def fake_resolve(**kwargs):
+            seen["streams"] = kwargs["detected_streams"]
+            return {"pageUrl": body["pageUrl"], "pageTitle": body["pageTitle"], "candidates": [], "errors": []}
+
+        with mock.patch.object(extension, "resolve_web_video", side_effect=fake_resolve):
+            response = self.client.post(
+                "/extension/videos/resolve",
+                json=body,
+                headers=self.auth_headers(),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(seen["streams"][0]["isDouyinPageData"])
+
     def test_import_job_and_job_status_round_trip(self):
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

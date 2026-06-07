@@ -174,17 +174,27 @@ function formatDiagnostics(diagnostics) {
   }
 
   const receivedCookies = diagnostics.receivedCookies || {};
+  const ytDlpCookies = diagnostics.ytDlpCookies || {};
   const kind = hostKind();
   if (kind === "bilibili") {
     parts.push(receivedCookies.bilibiliSessdata ? "AInote 已收到 SESSDATA" : "AInote 未收到 SESSDATA");
+    if (receivedCookies.bilibiliSessdata) {
+      parts.push(ytDlpCookies.bilibiliSessdata === false ? "yt-dlp 未识别登录态" : "yt-dlp 已识别登录态");
+    }
   } else if (kind === "douyin") {
     parts.push(receivedCookies.douyinFresh ? "AInote 已收到抖音 fresh cookie" : "AInote 未收到抖音 fresh cookie");
+    if (receivedCookies.douyinFresh && ytDlpCookies.douyinFresh === false) {
+      parts.push("yt-dlp 未识别抖音 cookie");
+    }
   }
   if (diagnostics.detectedStreamCount) {
     parts.push(`嗅探 ${diagnostics.detectedStreamCount} 条`);
   }
   if (diagnostics.extractors?.length) {
     parts.push(diagnostics.extractors.slice(0, 2).join(", "));
+  }
+  if (diagnostics.ytDlpMessages?.length) {
+    parts.push(diagnostics.ytDlpMessages[0]);
   }
   return parts.join("；");
 }

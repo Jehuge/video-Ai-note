@@ -29,6 +29,7 @@ class DetectedStream(BaseModel):
     bandwidth: Optional[int] = None
     codecs: Optional[str] = None
     isBilibiliPlayInfo: Optional[bool] = False
+    isDouyinPageData: Optional[bool] = False
 
 
 class BrowserCookie(BaseModel):

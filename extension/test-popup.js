@@ -273,7 +273,9 @@ async function testResolveDiagnosticsAreShown() {
         maxHeight: 480,
         detectedStreamCount: 0,
         extractors: ["BiliBili"],
-        receivedCookies: { bilibiliSessdata: true }
+        receivedCookies: { bilibiliSessdata: true },
+        ytDlpCookies: { bilibiliSessdata: false },
+        ytDlpMessages: ["Format(s) 1080P are missing; you have to become a premium member"]
       }
     }
   });
@@ -282,6 +284,8 @@ async function testResolveDiagnosticsAreShown() {
 
   assert(env.elements.diagnostics.textContent.includes("最高 480p"), "diagnostics should show max resolved height");
   assert(env.elements.diagnostics.textContent.includes("AInote 已收到 SESSDATA"), "diagnostics should show backend cookie receipt");
+  assert(env.elements.diagnostics.textContent.includes("yt-dlp 未识别登录态"), "diagnostics should show yt-dlp cookie state");
+  assert(env.elements.diagnostics.textContent.includes("premium member"), "diagnostics should show yt-dlp quality warnings");
   assert(env.elements.diagnostics.textContent.includes("BiliBili"), "diagnostics should show extractor name");
 }
 

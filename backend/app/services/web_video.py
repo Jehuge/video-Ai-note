@@ -47,6 +47,21 @@ TASK_STATUS_TO_JOB = {
     "summarizing": ("running_note", 99, "Generating note"),
 }
 
+YTDLP_DIAGNOSTIC_MARKERS = (
+    "format(s)",
+    "missing",
+    "premium",
+    "member",
+    "login",
+    "logged in",
+    "fresh cookies",
+    "requested format is not available",
+    "only preview format is available",
+    "unable to extract",
+    "http error 403",
+    "http error 412",
+)
+
 
 @dataclass
 class WebVideoJob:
@@ -92,6 +107,62 @@ class WebVideoJobManager:
 
 
 job_manager = WebVideoJobManager()
+
+
+def _sanitize_ytdlp_message(message: Any) -> str:
+    text = re.sub(r"\s+", " ", str(message or "")).strip()
+    if not text:
+        return ""
+    text = re.sub(r"(?i)(SESSDATA|bili_jct|DedeUserID|sid_tt|sessionid|msToken|ttwid)=([^;\s&]+)", r"\1=<redacted>", text)
+    text = re.sub(r"https?://[^\s]+", lambda match: match.group(0).split("?", 1)[0][:120], text)
+    return text[:240]
+
+
+def _is_useful_ytdlp_diagnostic(message: str) -> bool:
+    lower = message.lower()
+    return any(marker in lower for marker in YTDLP_DIAGNOSTIC_MARKERS)
+
+
+def _append_unique_diagnostic(messages: List[str], message: Any, limit: int = 6) -> None:
+    sanitized = _sanitize_ytdlp_message(message)
+    if not sanitized or not _is_useful_ytdlp_diagnostic(sanitized):
+        return
+    if sanitized not in messages and len(messages) < limit:
+        messages.append(sanitized)
+
+
+class YtDlpDiagnosticLogger:
+    def __init__(self, messages: List[str]):
+        self.messages = messages
+
+    def debug(self, message):
+        _append_unique_diagnostic(self.messages, message)
+
+    def warning(self, message):
+        _append_unique_diagnostic(self.messages, message)
+
+    def error(self, message):
+        _append_unique_diagnostic(self.messages, message)
+
+
+def _record_ytdlp_cookie_diagnostics(ydl: Any, diagnostics: Optional[Dict[str, Any]]) -> None:
+    if diagnostics is None:
+        return
+    cookiejar = getattr(ydl, "cookiejar", None)
+    getter = getattr(cookiejar, "get_cookies_for_url", None)
+    if not getter:
+        return
+
+    def names_for(url: str) -> set:
+        try:
+            return {getattr(cookie, "name", "") for cookie in getter(url)}
+        except Exception:
+            return set()
+
+    bilibili_names = names_for("https://api.bilibili.com/x/web-interface/nav")
+    douyin_names = names_for("https://www.douyin.com/")
+    diagnostics["bilibiliSessdata"] = bool("SESSDATA" in bilibili_names)
+    diagnostics["douyinFresh"] = bool({"s_v_web_id", "msToken", "ttwid"} & douyin_names)
 
 
 def cancel_jobs_for_task(task_id: str, message: str = "Canceled in AInote") -> List[WebVideoJob]:
@@ -261,22 +332,29 @@ def _normalize_detected_streams(streams: List[Dict[str, Any]], page_title: str =
             continue
         if url.startswith("blob:"):
             continue
-        if _is_fragment_stream(stream) and not stream.get("isBilibiliPlayInfo"):
+        if _is_fragment_stream(stream) and not stream.get("isBilibiliPlayInfo") and not stream.get("isDouyinPageData"):
             continue
         seen.add(url)
 
         parsed = urlparse(url)
         suffix = _stream_suffix(url)
         mime = _stream_mime(stream)
-        if not stream.get("isBilibiliPlayInfo") and not _is_probable_media_url(url, mime):
+        if not stream.get("isBilibiliPlayInfo") and not stream.get("isDouyinPageData") and not _is_probable_media_url(url, mime):
             continue
 
         ext = suffix.lstrip(".") if suffix else (stream.get("ext") or ("m3u8" if _is_manifest_stream(stream) else "mp4"))
         protocol = _stream_protocol(stream)
 
         label = _stream_label(stream, index)
-        format_id = "bilibili-playinfo" if stream.get("isBilibiliPlayInfo") else "detected"
-        extractor = "bilibili-playinfo" if stream.get("isBilibiliPlayInfo") else "browser-detected"
+        if stream.get("isBilibiliPlayInfo"):
+            format_id = "bilibili-playinfo"
+            extractor = "bilibili-playinfo"
+        elif stream.get("isDouyinPageData"):
+            format_id = "douyin-page-data"
+            extractor = "douyin-page-data"
+        else:
+            format_id = "detected"
+            extractor = "browser-detected"
         normalized.append({
             "id": _stream_id(url),
             "title": page_title or parsed.netloc or "Detected video",
@@ -422,7 +500,7 @@ def _temporary_cookiefile(cookie: str = "", cookie_details: Optional[List[Dict[s
 
 
 def _yt_dlp_options(headers: Optional[Dict[str, str]] = None, cookie: Optional[str] = None,
-                    referer: Optional[str] = None) -> Dict[str, Any]:
+                    referer: Optional[str] = None, diagnostic_messages: Optional[List[str]] = None) -> Dict[str, Any]:
     http_headers = dict(DEFAULT_BROWSER_HEADERS)
     for key, value in (headers or {}).items():
         key_lower = key.lower()
@@ -446,6 +524,8 @@ def _yt_dlp_options(headers: Optional[Dict[str, str]] = None, cookie: Optional[s
         "retries": 3,
         "http_headers": http_headers,
     }
+    if diagnostic_messages is not None:
+        options["logger"] = YtDlpDiagnosticLogger(diagnostic_messages)
     impersonate_target = os.getenv("YTDLP_IMPERSONATE", "").strip()
     if impersonate_target:
         options["impersonate"] = impersonate_target
@@ -494,7 +574,9 @@ def _cookie_names(cookie: Optional[str] = None, cookie_details: Optional[List[Di
 def _candidate_diagnostics(candidates: List[Dict[str, Any]], errors: List[str],
                            cookie: Optional[str] = None,
                            cookie_details: Optional[List[Dict[str, Any]]] = None,
-                           detected_streams: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+                           detected_streams: Optional[List[Dict[str, Any]]] = None,
+                           yt_dlp_messages: Optional[List[str]] = None,
+                           yt_dlp_cookies: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     cookie_names = _cookie_names(cookie, cookie_details)
     format_count = 0
     max_height = None
@@ -522,6 +604,8 @@ def _candidate_diagnostics(candidates: List[Dict[str, Any]], errors: List[str],
             "douyinFresh": bool({"s_v_web_id", "msToken", "ttwid"} & cookie_names),
             "douyinLogin": bool({"sid_tt", "sessionid", "uid_tt"} & cookie_names),
         },
+        "ytDlpCookies": yt_dlp_cookies or {},
+        "ytDlpMessages": list(yt_dlp_messages or [])[:6],
         "errorCount": len(errors),
     }
 
@@ -590,15 +674,18 @@ def _info_to_candidates(info: Dict[str, Any], page_title: str, source_url: str,
 def _resolve_with_ytdlp(url: str, page_title: str = "", headers: Optional[Dict[str, str]] = None,
                        cookie: Optional[str] = None, cookie_details: Optional[List[Dict[str, Any]]] = None,
                        referer: Optional[str] = None,
-                       candidate_prefix: str = "yt") -> List[Dict[str, Any]]:
+                       candidate_prefix: str = "yt",
+                       yt_dlp_messages: Optional[List[str]] = None,
+                       yt_dlp_cookie_diagnostics: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     import yt_dlp
 
     url = _normalize_page_url(url)
-    options = _yt_dlp_options(headers=headers, cookie=cookie, referer=referer)
+    options = _yt_dlp_options(headers=headers, cookie=cookie, referer=referer, diagnostic_messages=yt_dlp_messages)
     with _temporary_cookiefile(cookie or "", cookie_details=cookie_details) as cookie_file:
         if cookie_file:
             options["cookiefile"] = cookie_file
         with yt_dlp.YoutubeDL(options) as ydl:
+            _record_ytdlp_cookie_diagnostics(ydl, yt_dlp_cookie_diagnostics)
             info = ydl.extract_info(url, download=False)
     return _info_to_candidates(info, page_title=page_title, source_url=url, candidate_prefix=candidate_prefix)
 
@@ -608,6 +695,8 @@ def resolve_web_video(page_url: str, page_title: str = "", detected_streams: Opt
                       cookie_details: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     candidates = []
     errors = []
+    yt_dlp_messages: List[str] = []
+    yt_dlp_cookie_diagnostics: Dict[str, Any] = {}
 
     if page_url:
         try:
@@ -618,15 +707,20 @@ def resolve_web_video(page_url: str, page_title: str = "", detected_streams: Opt
                 cookie=cookie,
                 cookie_details=cookie_details,
                 candidate_prefix="yt",
+                yt_dlp_messages=yt_dlp_messages,
+                yt_dlp_cookie_diagnostics=yt_dlp_cookie_diagnostics,
             ))
         except Exception as exc:
             errors.append(f"page: {exc}")
+            _append_unique_diagnostic(yt_dlp_messages, str(exc))
 
     fallback_streams = []
     seen_stream_urls = set()
     for stream in detected_streams or []:
         url = (stream.get("url") or "").strip()
-        if not url or url.startswith("blob:") or (_is_fragment_stream(stream) and not stream.get("isBilibiliPlayInfo")):
+        if not url or url.startswith("blob:") or (
+            _is_fragment_stream(stream) and not stream.get("isBilibiliPlayInfo") and not stream.get("isDouyinPageData")
+        ):
             continue
         if url in seen_stream_urls:
             continue
@@ -643,12 +737,15 @@ def resolve_web_video(page_url: str, page_title: str = "", detected_streams: Opt
                     cookie_details=cookie_details,
                     referer=page_url,
                     candidate_prefix=stream_prefix,
+                    yt_dlp_messages=yt_dlp_messages,
+                    yt_dlp_cookie_diagnostics=yt_dlp_cookie_diagnostics,
                 )
                 if resolved:
                     candidates.extend(resolved)
                     continue
             except Exception as exc:
                 errors.append(f"stream {url}: {exc}")
+                _append_unique_diagnostic(yt_dlp_messages, str(exc))
 
         fallback_streams.append(stream)
 
@@ -660,6 +757,8 @@ def resolve_web_video(page_url: str, page_title: str = "", detected_streams: Opt
         cookie=cookie,
         cookie_details=cookie_details,
         detected_streams=detected_streams,
+        yt_dlp_messages=yt_dlp_messages,
+        yt_dlp_cookies=yt_dlp_cookie_diagnostics,
     )
 
     return {
@@ -700,7 +799,7 @@ def _download_with_ytdlp(job_id: str, payload: Dict[str, Any]) -> Path:
     job_prefix = f"web_{job_id}"
     outtmpl = str(UPLOAD_DIR / f"{job_prefix}.%(ext)s")
     format_id = payload.get("formatId") or payload.get("format_id") or "bv*+ba/best"
-    if format_id == "detected":
+    if format_id in {"detected", "douyin-page-data"}:
         format_id = "best"
     cookie = payload.get("cookie") or payload.get("cookies")
     cookie_details = payload.get("cookieDetails") or payload.get("cookie_details") or []
