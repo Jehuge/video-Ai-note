@@ -7,6 +7,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.routers import note
+from app.services.note_progress import write_note_progress
 
 
 class NoteStepTests(unittest.TestCase):
@@ -59,6 +60,30 @@ class NoteStepTests(unittest.TestCase):
 
         self.assertEqual(updates[-1][0][:2], ("task-2", "failed"))
         self.assertEqual(updates[-1][1]["error_message"], "ffmpeg failed")
+
+    def test_get_task_returns_note_generation_progress(self):
+        task = mock.Mock()
+        task.task_id = "task-progress"
+        task.filename = "video.mp4"
+        task.status = "summarizing"
+        task.error_message = None
+        task.markdown = None
+        task.source = "upload"
+        task.source_url = None
+        task.created_at = None
+        task.updated_at = None
+
+        with TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            write_note_progress(output_dir, "task-progress", "正在生成第 1/3 段摘要", "## partial")
+
+            with mock.patch.object(note, "NOTE_OUTPUT_DIR", output_dir), \
+                    mock.patch.object(note, "get_task_by_id", return_value=task):
+                response = note.get_task("task-progress")
+
+        self.assertEqual(response["code"], 200)
+        self.assertEqual(response["data"]["progress_message"], "正在生成第 1/3 段摘要")
+        self.assertEqual(response["data"]["partial_markdown"], "## partial")
 
     def test_empty_transcript_fails_instead_of_summarizing_empty_note(self):
         from app.models.transcriber_model import TranscriptResult

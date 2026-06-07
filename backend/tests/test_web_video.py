@@ -311,6 +311,32 @@ class WebVideoServiceTests(unittest.TestCase):
         self.assertEqual(updated.status, "canceled")
         self.assertEqual(updated.message, "Canceled in AInote")
 
+    def test_job_status_uses_note_progress_message_while_summarizing(self):
+        job = web_video.job_manager.create("https://example.test/watch")
+        web_video.job_manager.update(
+            job.job_id,
+            status="running_note",
+            progress=96,
+            message="Generating note",
+            task_id="task-progress",
+        )
+
+        task = mock.Mock()
+        task.status = "summarizing"
+
+        with TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            (output_dir / "task-progress_progress.json").write_text(
+                '{"message":"正在生成第 2/4 段摘要","partial_markdown":"## partial"}',
+                encoding="utf-8",
+            )
+            with mock.patch.object(web_video, "NOTE_OUTPUT_DIR", output_dir), \
+                    mock.patch.object(web_video, "get_task_by_id", return_value=task):
+                updated = web_video.sync_job_with_task(job.job_id)
+
+        self.assertEqual(updated.status, "running_note")
+        self.assertEqual(updated.message, "正在生成第 2/4 段摘要")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,6 +5,8 @@ export interface Task {
   filename: string
   status: 'pending' | 'processing' | 'transcribing' | 'transcribed' | 'summarizing' | 'completed' | 'failed'
   markdown?: string
+  partialMarkdown?: string
+  progressMessage?: string
   errorMessage?: string
   source?: 'upload' | 'bilibili' | 'web'
   sourceUrl?: string

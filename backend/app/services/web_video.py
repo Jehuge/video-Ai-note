@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 from app.db.video_task_dao import create_task, get_task_by_id, update_task_status
 from app.services.model_settings import load_active_model_config
 from app.services.note import NoteGenerator
+from app.services.note_progress import read_note_progress
 from app.utils.ffmpeg_helper import get_ffmpeg_path
 from app.utils.logger import get_logger
 
@@ -137,6 +138,10 @@ def sync_job_with_task(job_id: str) -> Optional[WebVideoJob]:
     mapped = TASK_STATUS_TO_JOB.get(task_status)
     if mapped:
         status, progress, message = mapped
+        if task_status == "summarizing":
+            note_progress = read_note_progress(NOTE_OUTPUT_DIR, job.task_id)
+            if note_progress and note_progress.get("message"):
+                message = note_progress["message"]
         return job_manager.update(
             job_id,
             status=status,

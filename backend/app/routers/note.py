@@ -9,6 +9,8 @@ from fastapi.responses import JSONResponse
 
 from app.db.video_task_dao import create_task, get_task_by_id, get_all_tasks, update_task_status, delete_task_by_id
 from app.services.note import NoteGenerator
+from app.services.model_settings import load_active_model_config
+from app.services.note_progress import read_note_progress
 from app.services.web_video import cancel_jobs_for_task
 from app.utils.response import ResponseWrapper as R
 from app.utils.logger import get_logger
@@ -26,6 +28,27 @@ NOTE_OUTPUT_DIR = Path(os.getenv("NOTE_OUTPUT_DIR", "note_results"))
 ALLOWED_EXTENSIONS = {'.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm', '.m4v', '.mp3', '.wav', '.m4a'}
 
 
+def _merge_model_config_with_active(task_config: Optional[dict] = None) -> Optional[dict]:
+    if task_config and task_config.get("_explicit_current_model"):
+        return task_config
+    active_config = load_active_model_config() or {}
+    if active_config:
+        merged = dict(active_config)
+        if task_config and task_config.get("note_style"):
+            merged["note_style"] = task_config.get("note_style")
+        return merged
+    return task_config
+
+
+def _write_task_model_config(task_id: str, model_config: Optional[dict]) -> None:
+    if not model_config:
+        return
+    config_file = NOTE_OUTPUT_DIR / f"{task_id}_model_config.json"
+    import json
+    with open(config_file, "w", encoding="utf-8") as f:
+        json.dump(model_config, f, ensure_ascii=False, indent=2)
+
+
 def run_note_task_step(task_id: str, video_path: str, filename: str, step: str, screenshot: bool = False):
     """执行单个步骤"""
     try:
@@ -37,6 +60,8 @@ def run_note_task_step(task_id: str, video_path: str, filename: str, step: str, 
                 import json
                 with open(config_file, "r", encoding="utf-8") as f:
                     model_config = json.load(f)
+                model_config = _merge_model_config_with_active(model_config)
+                _write_task_model_config(task_id, model_config)
                 logger.info(
                     "加载模型配置: "
                     f"provider={model_config.get('provider')}, "
@@ -48,6 +73,10 @@ def run_note_task_step(task_id: str, video_path: str, filename: str, step: str, 
                 logger.warning(f"读取模型配置失败: {e}, 将使用默认配置")
         
         # 从配置中获取 style
+        if model_config is None:
+            model_config = _merge_model_config_with_active(None)
+            _write_task_model_config(task_id, model_config)
+
         note_style = "simple"
         if model_config and "note_style" in model_config:
             note_style = model_config["note_style"]
@@ -231,6 +260,11 @@ def get_task(task_id: str):
         # 如果任务已完成或有 markdown，都返回 markdown
         if task.markdown:
             result["markdown"] = task.markdown
+
+        progress = read_note_progress(NOTE_OUTPUT_DIR, task_id)
+        if progress:
+            result["progress_message"] = progress.get("message")
+            result["partial_markdown"] = progress.get("partial_markdown") or ""
         
         # 尝试获取转写结果
         transcript_file = NOTE_OUTPUT_DIR / f"{task_id}_transcript.json"
@@ -305,7 +339,8 @@ def regenerate_note(
         # 获取模型配置（如果提供）
         model_config_dict = None
         if request and request.modelConfig:
-            model_config_dict = request.modelConfig
+            model_config_dict = dict(request.modelConfig)
+            model_config_dict["_explicit_current_model"] = True
             logger.info(f"重新生成时收到模型配置: provider={model_config_dict.get('provider')}, model={model_config_dict.get('model')}")
         
         # 如果没有提供模型配置，尝试从文件读取（兼容旧任务）
@@ -369,6 +404,8 @@ def regenerate_note(
 
 class ConfirmStepRequest(BaseModel):
     step: str
+    modelConfig: Optional[dict] = None
+    noteStyle: Optional[str] = None
 
 @router.post("/task/{task_id}/confirm_step")
 def confirm_step(task_id: str, request: ConfirmStepRequest, background_tasks: BackgroundTasks = BackgroundTasks()):
@@ -388,6 +425,12 @@ def confirm_step(task_id: str, request: ConfirmStepRequest, background_tasks: Ba
         
         # 获取截图设置（从数据库获取）
         screenshot = bool(getattr(task, 'screenshot', 0))
+        if request.modelConfig:
+            model_config = dict(request.modelConfig)
+            model_config["_explicit_current_model"] = True
+            if request.noteStyle:
+                model_config["note_style"] = request.noteStyle
+            _write_task_model_config(task_id, model_config)
         
         # 根据步骤执行相应的任务
         step = request.step

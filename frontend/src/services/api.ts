@@ -66,8 +66,13 @@ export const getTasks = async (limit: number = 50) => {
 }
 
 // 确认步骤
-export const confirmStep = async (taskId: string, step: string) => {
-  return await api.post(`/task/${taskId}/confirm_step`, { step })
+export const confirmStep = async (taskId: string, step: string, noteStyle?: string) => {
+  const modelConfig = step === 'summarize' ? getSelectedModelConfig(noteStyle || 'simple') : null
+  return await api.post(`/task/${taskId}/confirm_step`, {
+    step,
+    modelConfig,
+    noteStyle,
+  })
 }
 
 // 重新生成笔记

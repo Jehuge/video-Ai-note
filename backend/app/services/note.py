@@ -9,6 +9,7 @@ from app.db.video_task_dao import update_task_status
 from app.gpt.openai_gpt import OpenAIGPT
 from app.models.notes_model import NoteResult
 from app.services.model_provider import normalize_api_key, normalize_base_url, normalize_provider_type
+from app.services.note_progress import clear_note_progress, write_note_progress
 from app.transcriber.transcriber_provider import get_transcriber
 from app.utils.logger import get_logger
 from app.utils.video_helper import generate_screenshot
@@ -236,7 +237,18 @@ class NoteGenerator:
         
         # 调用 GPT（延迟初始化）
         gpt = self._get_gpt()
-        markdown = gpt.summarize(transcript, filename, screenshot, note_style)
+        write_note_progress(NOTE_OUTPUT_DIR, task_id, "正在请求 AI 生成笔记", "")
+
+        def on_note_progress(message: str, partial_markdown: str) -> None:
+            write_note_progress(NOTE_OUTPUT_DIR, task_id, message, partial_markdown)
+
+        markdown = gpt.summarize(
+            transcript,
+            filename,
+            screenshot,
+            note_style,
+            progress_callback=on_note_progress,
+        )
         
         # 清理 AI 输出中的思考过程标签（redacted_reasoning）
         # 删除所有 <think>...</think> 标签及其内容
@@ -249,6 +261,7 @@ class NoteGenerator:
         
         # 保存缓存
         cache_file.write_text(markdown, encoding='utf-8')
+        clear_note_progress(NOTE_OUTPUT_DIR, task_id)
         
         logger.info("笔记生成完成")
         return markdown

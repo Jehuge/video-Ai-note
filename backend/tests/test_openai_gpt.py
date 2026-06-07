@@ -42,6 +42,64 @@ class OpenAIGPTTests(unittest.TestCase):
         self.assertEqual(markdown, "## Note\n- item")
         self.assertTrue(fake_client.chat.completions.create.call_args.kwargs["stream"])
 
+    def test_streaming_progress_callback_receives_partial_markdown(self):
+        fake_client = mock.Mock()
+        fake_client.chat.completions.create.return_value = [
+            _chunk("a" * 250),
+            _chunk("b" * 250),
+        ]
+
+        with mock.patch("app.gpt.openai_gpt.create_openai_client", return_value=fake_client):
+            gpt = OpenAIGPT(api_key="sk-test", base_url="https://example.test/v1", model="demo")
+
+        events = []
+        transcript = TranscriptResult(
+            language="zh",
+            full_text="hello",
+            segments=[TranscriptSegment(start=0, end=1, text="hello")],
+        )
+
+        markdown = gpt.summarize(
+            transcript,
+            filename="demo.mp4",
+            progress_callback=lambda message, partial: events.append((message, partial)),
+        )
+
+        self.assertEqual(markdown, "a" * 250 + "b" * 250)
+        self.assertTrue(events)
+        self.assertEqual(events[-1][0], "正在生成笔记")
+        self.assertEqual(events[-1][1], markdown)
+
+    def test_long_transcript_uses_chunked_generation_and_final_merge(self):
+        fake_client = mock.Mock()
+        fake_client.chat.completions.create.side_effect = [
+            [_chunk("chunk one")],
+            [_chunk("chunk two")],
+            [_chunk("chunk three")],
+            [_chunk("# Final note")],
+        ]
+
+        with mock.patch("app.gpt.openai_gpt.create_openai_client", return_value=fake_client):
+            gpt = OpenAIGPT(api_key="sk-test", base_url="https://example.test/v1", model="demo")
+
+        segments = [
+            TranscriptSegment(start=i * 2, end=i * 2 + 1, text="x" * 500)
+            for i in range(60)
+        ]
+        transcript = TranscriptResult(language="zh", full_text=" ".join(seg.text for seg in segments), segments=segments)
+        events = []
+
+        markdown = gpt.summarize(
+            transcript,
+            filename="long.mp4",
+            progress_callback=lambda message, partial: events.append((message, partial)),
+        )
+
+        self.assertEqual(markdown, "# Final note")
+        self.assertEqual(fake_client.chat.completions.create.call_count, 4)
+        self.assertTrue(any("正在生成第 1/3 段摘要" in message for message, _ in events))
+        self.assertTrue(any(message == "正在合并全片笔记" for message, _ in events))
+
 
 def _chunk(content):
     return mock.Mock(choices=[mock.Mock(delta=mock.Mock(content=content))])

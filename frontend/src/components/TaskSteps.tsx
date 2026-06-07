@@ -4,6 +4,7 @@ import { useTaskStore } from '../store/taskStore'
 import { getTaskStatus, confirmStep, regenerateNote } from '../services/api'
 import StepProgress, { StepStatus } from './StepProgress'
 import ContentPreviewModal from './ContentPreviewModal'
+import MarkdownContent from './MarkdownContent'
 import toast from 'react-hot-toast'
 
 interface TaskStepsProps {
@@ -319,6 +320,8 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
           updateTaskRef.current(taskId, {
             status: taskData.status,
             markdown: taskData.markdown || currentTask?.markdown || '',
+            partialMarkdown: taskData.partial_markdown || currentTask?.partialMarkdown || '',
+            progressMessage: taskData.progress_message || '',
             errorMessage: taskData.error_message || '',
           })
 
@@ -358,6 +361,8 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
           updateTaskRef.current(taskId, {
             status: taskData.status,
             markdown: taskData.markdown || currentTask?.markdown || '',
+            partialMarkdown: taskData.partial_markdown || currentTask?.partialMarkdown || '',
+            progressMessage: taskData.progress_message || '',
             errorMessage: taskData.error_message || '',
           })
 
@@ -552,7 +557,7 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
         )
       )
 
-      await confirmStep(taskId, stepId)
+      await confirmStep(taskId, stepId, stepId === 'summarize' ? noteStyle : undefined)
       setAutoProcess(true)
     } catch (error) {
       console.error('确认步骤失败:', error)
@@ -591,6 +596,11 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
                   {task.errorMessage}
                 </div>
               )}
+              {task.status === 'summarizing' && task.progressMessage && (
+                <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700">
+                  {task.progressMessage}
+                </div>
+              )}
             </div>
 
             <h3 className="text-lg font-semibold text-gray-900 mb-6 px-1 flex items-center gap-2">
@@ -598,6 +608,39 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
               处理流程
             </h3>
             <StepProgress steps={steps} currentStep={currentStepIndex} />
+
+            {task.status === 'summarizing' && (
+              <div className="mt-6 rounded-2xl border border-blue-100 bg-white shadow-sm overflow-hidden">
+                <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
+                  <div>
+                    <h4 className="text-sm font-semibold text-slate-900">实时生成内容</h4>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {task.progressMessage || '正在生成笔记'}
+                    </p>
+                  </div>
+                  <div className="h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
+                </div>
+                <div className="max-h-96 overflow-y-auto p-5">
+                  {task.partialMarkdown ? (
+                    <MarkdownContent markdown={task.partialMarkdown} />
+                  ) : (
+                    <div className="text-sm text-slate-400">正在等待模型返回第一段内容...</div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {task.status === 'failed' && task.partialMarkdown && (
+              <div className="mt-6 rounded-2xl border border-amber-100 bg-white shadow-sm overflow-hidden">
+                <div className="border-b border-slate-100 px-5 py-3">
+                  <h4 className="text-sm font-semibold text-slate-900">失败前已生成的内容</h4>
+                  <p className="text-xs text-slate-500 mt-0.5">可以切换模型后重新生成，App 会复用已有转写。</p>
+                </div>
+                <div className="max-h-96 overflow-y-auto p-5">
+                  <MarkdownContent markdown={task.partialMarkdown} />
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
