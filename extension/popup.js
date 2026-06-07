@@ -474,6 +474,41 @@ function mergeCandidates(primary, fallback) {
   return merged;
 }
 
+function candidateMaxHeight(candidate) {
+  return Math.max(
+    0,
+    ...((candidate?.formats || [])
+      .map((format) => Number.parseInt(format.height || "", 10) || 0))
+  );
+}
+
+function candidateBestBandwidth(candidate) {
+  return Math.max(
+    0,
+    ...((candidate?.formats || [])
+      .map((format) => Number.parseInt(format.bandwidth || "", 10) || 0))
+  );
+}
+
+function candidatePriority(candidate) {
+  const extractor = String(candidate?.extractor || "").toLowerCase();
+  if (extractor === "bilibili-api") return 40;
+  if (extractor.includes("bilibili") || extractor.includes("playinfo")) return 30;
+  if (extractor.includes("douyin") || extractor.includes("tiktok")) return 25;
+  if (extractor === "page-url" || extractor === "selected-area") return 5;
+  return 10;
+}
+
+function sortCandidatesByQuality(candidates) {
+  return [...(candidates || [])].sort((left, right) => {
+    const byHeight = candidateMaxHeight(right) - candidateMaxHeight(left);
+    if (byHeight) return byHeight;
+    const byPriority = candidatePriority(right) - candidatePriority(left);
+    if (byPriority) return byPriority;
+    return candidateBestBandwidth(right) - candidateBestBandwidth(left);
+  });
+}
+
 async function resolveVideos() {
   const cookies = await collectSiteCookies();
   const selectedStreams = uniqueStreams(state.selectedVideo?.streams || []);
@@ -494,7 +529,9 @@ async function resolveVideos() {
   const json = await response.json();
   state.resolveErrors = json.data?.errors || [];
   state.diagnostics = json.data?.diagnostics || null;
-  state.candidates = (json.data?.candidates || []).filter((candidate) => !isFragmentUrl(candidate.sourceUrl || ""));
+  state.candidates = sortCandidatesByQuality(
+    (json.data?.candidates || []).filter((candidate) => !isFragmentUrl(candidate.sourceUrl || ""))
+  );
 }
 
 function renderCandidates() {

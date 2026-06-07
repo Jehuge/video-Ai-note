@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlencode, urlparse, urlunparse
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from app.db.video_task_dao import create_task, get_task_by_id, update_task_status
 from app.services.model_settings import load_active_model_config
@@ -565,6 +565,51 @@ def _dedupe_candidates(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     return deduped
 
 
+def _candidate_max_height(candidate: Dict[str, Any]) -> int:
+    heights = []
+    for fmt in candidate.get("formats") or []:
+        try:
+            heights.append(int(fmt.get("height") or 0))
+        except (TypeError, ValueError):
+            heights.append(0)
+    return max(heights or [0])
+
+
+def _candidate_best_bandwidth(candidate: Dict[str, Any]) -> int:
+    bandwidths = []
+    for fmt in candidate.get("formats") or []:
+        try:
+            bandwidths.append(int(fmt.get("bandwidth") or 0))
+        except (TypeError, ValueError):
+            bandwidths.append(0)
+    return max(bandwidths or [0])
+
+
+def _candidate_priority(candidate: Dict[str, Any]) -> int:
+    extractor = str(candidate.get("extractor") or "").lower()
+    if extractor == "bilibili-api":
+        return 40
+    if "bilibili" in extractor or "playinfo" in extractor:
+        return 30
+    if "douyin" in extractor or "tiktok" in extractor:
+        return 25
+    if extractor in {"page-url", "selected-area"}:
+        return 5
+    return 10
+
+
+def _sort_candidates_by_quality(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return sorted(
+        candidates,
+        key=lambda candidate: (
+            _candidate_max_height(candidate),
+            _candidate_priority(candidate),
+            _candidate_best_bandwidth(candidate),
+        ),
+        reverse=True,
+    )
+
+
 def _bilibili_bvid_from_url(url: str) -> Optional[str]:
     try:
         parsed = urlparse(url or "")
@@ -574,6 +619,32 @@ def _bilibili_bvid_from_url(url: str) -> Optional[str]:
         return None
     match = BILIBILI_BVID_PATTERN.search(parsed.path) or BILIBILI_BVID_PATTERN.search(parsed.query)
     return match.group(1) if match else None
+
+
+def _bilibili_page_number_from_url(url: str) -> int:
+    try:
+        parsed = urlparse(url or "")
+        values = parse_qs(parsed.query).get("p") or []
+        page = int(values[0]) if values else 1
+    except (TypeError, ValueError):
+        page = 1
+    return max(1, page)
+
+
+def _bilibili_select_page(view: Dict[str, Any], page_number: int) -> Dict[str, Any]:
+    pages = [page for page in view.get("pages") or [] if isinstance(page, dict)]
+    if not pages:
+        return {}
+    for page in pages:
+        try:
+            if int(page.get("page") or 0) == page_number:
+                return page
+        except (TypeError, ValueError):
+            continue
+    index = page_number - 1
+    if 0 <= index < len(pages):
+        return pages[index]
+    return pages[0]
 
 
 def _bilibili_headers(headers: Optional[Dict[str, str]] = None, referer: str = "") -> Dict[str, str]:
@@ -753,7 +824,8 @@ def _bilibili_api_candidates(page_url: str, page_title: str = "", headers: Optio
     if view_data.get("code") not in {0, None}:
         raise RuntimeError(f"Bilibili view API failed: {view_data.get('code')} {view_data.get('message')}")
     view = view_data.get("data") or {}
-    cid = view.get("cid")
+    selected_page = _bilibili_select_page(view, _bilibili_page_number_from_url(page_url))
+    cid = selected_page.get("cid") or view.get("cid")
     if not cid:
         return []
 
@@ -767,6 +839,9 @@ def _bilibili_api_candidates(page_url: str, page_title: str = "", headers: Optio
     mixin_key = _bilibili_wbi_key(nav_data)
     if diagnostics is not None:
         diagnostics["bilibiliApiLogin"] = nav_data.get("code") == 0 and bool((nav_data.get("data") or {}).get("isLogin"))
+        if selected_page:
+            diagnostics["bilibiliApiPage"] = selected_page.get("page")
+            diagnostics["bilibiliApiCid"] = selected_page.get("cid")
     if not mixin_key:
         raise RuntimeError("Bilibili WBI key was not returned")
 
@@ -1044,7 +1119,7 @@ def resolve_web_video(page_url: str, page_title: str = "", detected_streams: Opt
         fallback_streams.append(stream)
 
     candidates.extend(_normalize_detected_streams(fallback_streams, page_title=page_title))
-    candidates = _dedupe_candidates(candidates)
+    candidates = _sort_candidates_by_quality(_dedupe_candidates(candidates))
     diagnostics = _candidate_diagnostics(
         candidates,
         errors,

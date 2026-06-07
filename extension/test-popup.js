@@ -312,6 +312,58 @@ async function testResolveDiagnosticsAreShown() {
   assert(env.elements.diagnostics.textContent.includes("BiliBili"), "diagnostics should show extractor name");
 }
 
+async function testHighestQualityCandidateIsSelectedByDefault() {
+  const env = runPopupTest({
+    pageScan: {
+      pageUrl: "https://www.bilibili.com/video/BV1demo/",
+      pageTitle: "Bilibili demo",
+      videoCount: 1,
+      streams: []
+    },
+    resolveResponse: {
+      candidates: [{
+        id: "yt-0",
+        title: "Bilibili demo",
+        sourceUrl: "https://www.bilibili.com/video/BV1demo/",
+        extractor: "BiliBili",
+        formats: [{ formatId: "64+ba/best", label: "480p mp4", height: 480 }]
+      }, {
+        id: "bilibili-api-BV1demo",
+        title: "Bilibili demo",
+        sourceUrl: "https://www.bilibili.com/video/BV1demo/",
+        extractor: "bilibili-api",
+        formats: [{
+          formatId: "bilibili-api-80",
+          label: "1080P 高清 1080p avc1",
+          height: 1080,
+          bandwidth: 2000000,
+          sourceUrl: "https://upos.example.test/video-1080.m4s",
+          companionAudioUrl: "https://upos.example.test/audio.m4s"
+        }, {
+          formatId: "bilibili-api-64",
+          label: "720P 高清 720p avc1",
+          height: 720,
+          bandwidth: 1200000,
+          sourceUrl: "https://upos.example.test/video-720.m4s",
+          companionAudioUrl: "https://upos.example.test/audio.m4s"
+        }]
+      }],
+      diagnostics: {
+        candidateCount: 2,
+        formatCount: 3,
+        maxHeight: 1080,
+        receivedCookies: { bilibiliSessdata: true },
+        bilibiliApi: { bilibiliApiLogin: true, bilibiliApiFormatHeights: [1080, 720] }
+      }
+    }
+  });
+
+  await env.context.__initialRefresh;
+
+  assert(env.elements.candidate.value === "bilibili-api-BV1demo", "highest quality Bilibili API candidate should be selected by default");
+  assert(env.elements.format.value === "bilibili-api-80", "highest quality format should be selected by default");
+}
+
 async function testCopyDiagnosticsIncludesResolveDetails() {
   const env = runPopupTest({
     pageScan: {
@@ -658,6 +710,7 @@ async function testCanceledJobStopsPolling() {
   await testAppOfflineDisablesSend();
   await testResolveErrorsAreShownWithFallback();
   await testResolveDiagnosticsAreShown();
+  await testHighestQualityCandidateIsSelectedByDefault();
   await testCopyDiagnosticsIncludesResolveDetails();
   await testCookiesAreOptIn();
   await testCookiesCanBeDisabled();

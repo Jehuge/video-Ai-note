@@ -424,6 +424,8 @@ class WebVideoServiceTests(unittest.TestCase):
         self.assertEqual(result["diagnostics"]["maxHeight"], 1080)
         self.assertTrue(any(call[1]["headers"]["Cookie"].startswith("SESSDATA=demo") for call in fake_session.calls))
         self.assertTrue(any(call[1].get("params", {}).get("qn") == "80" for call in fake_session.calls))
+        self.assertEqual(result["candidates"][0]["extractor"], "bilibili-api")
+        self.assertEqual(result["candidates"][0]["formats"][0]["height"], 1080)
 
     def test_choose_download_url_prefers_candidate_url(self):
         url = web_video._choose_download_url({
@@ -432,6 +434,77 @@ class WebVideoServiceTests(unittest.TestCase):
         })
 
         self.assertEqual(url, "https://cdn.example.test/video.m3u8")
+
+    def test_bilibili_api_uses_page_query_cid(self):
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return self.payload
+
+        class FakeSession:
+            def __init__(self):
+                self.play_params = []
+
+            def get(self, url, **kwargs):
+                if url.endswith("/x/web-interface/view"):
+                    return FakeResponse({
+                        "code": 0,
+                        "data": {
+                            "cid": 111,
+                            "title": "Multi page",
+                            "pages": [
+                                {"page": 1, "cid": 111, "part": "P1"},
+                                {"page": 2, "cid": 222, "part": "P2"},
+                            ],
+                        },
+                    })
+                if url.endswith("/x/web-interface/nav"):
+                    key = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ab"
+                    return FakeResponse({
+                        "code": 0,
+                        "data": {
+                            "isLogin": True,
+                            "wbi_img": {
+                                "img_url": f"https://i0.hdslb.com/bfs/wbi/{key[:32]}.png",
+                                "sub_url": f"https://i0.hdslb.com/bfs/wbi/{key[32:]}.png",
+                            },
+                        },
+                    })
+                if url.endswith("/x/player/wbi/playurl"):
+                    self.play_params.append(kwargs.get("params") or {})
+                    return FakeResponse({
+                        "code": 0,
+                        "data": {
+                            "accept_quality": [80],
+                            "support_formats": [{"quality": 80, "new_description": "1080P 高清"}],
+                            "dash": {
+                                "video": [{
+                                    "id": 80,
+                                    "baseUrl": "https://upos.example.test/video-p2-1080.m4s",
+                                    "height": 1080,
+                                    "bandwidth": 2000000,
+                                }],
+                                "audio": [{"baseUrl": "https://upos.example.test/audio.m4s"}],
+                            },
+                        },
+                    })
+                raise AssertionError(f"unexpected URL {url}")
+
+        fake_session = FakeSession()
+        with mock.patch("requests.Session", return_value=fake_session):
+            result = web_video._bilibili_api_candidates(
+                "https://www.bilibili.com/video/BV1demo/?p=2",
+                cookie="SESSDATA=demo",
+                diagnostics={},
+            )
+
+        self.assertTrue(result)
+        self.assertTrue(any(params.get("cid") == "222" for params in fake_session.play_params))
 
     def test_ytdlp_options_set_network_timeouts(self):
         options = web_video._yt_dlp_options()
