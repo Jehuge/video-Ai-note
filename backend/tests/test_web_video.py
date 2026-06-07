@@ -204,6 +204,18 @@ class WebVideoServiceTests(unittest.TestCase):
         self.assertNotEqual(options["http_headers"]["Cookie"], "ignored=1")
         self.assertNotIn("cookiefile", options)
 
+    def test_ytdlp_options_do_not_force_bilibili_legacy_flv(self):
+        options = web_video._yt_dlp_options()
+
+        bilibili_args = (options.get("extractor_args") or {}).get("bilibili") or {}
+        self.assertNotIn("prefer_multi_flv", bilibili_args)
+
+    def test_ytdlp_options_allow_optional_browser_impersonation(self):
+        with mock.patch.dict("os.environ", {"YTDLP_IMPERSONATE": "chrome"}, clear=False):
+            options = web_video._yt_dlp_options()
+
+        self.assertEqual(options["impersonate"], "chrome")
+
     def test_temporary_cookiefile_writes_browser_cookie_for_supported_sites(self):
         with web_video._temporary_cookiefile("SESSDATA=demo; msToken=abc") as cookie_file:
             path = Path(cookie_file)

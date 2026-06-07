@@ -416,12 +416,10 @@ def _yt_dlp_options(headers: Optional[Dict[str, str]] = None, cookie: Optional[s
         "fragment_retries": 3,
         "retries": 3,
         "http_headers": http_headers,
-        "extractor_args": {
-            "bilibili": {
-                "prefer_multi_flv": ["1"],
-            },
-        },
     }
+    impersonate_target = os.getenv("YTDLP_IMPERSONATE", "").strip()
+    if impersonate_target:
+        options["impersonate"] = impersonate_target
 
     try:
         ffmpeg_path = Path(get_ffmpeg_path())
