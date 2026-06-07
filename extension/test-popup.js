@@ -618,6 +618,36 @@ async function testFragmentsAreFilteredBeforeResolve() {
   assert(body.detectedStreams[0].url === "https://cdn.example.test/master.m3u8", "manifest should be preserved");
 }
 
+async function testBilibiliPlayInfoTracksArePreservedBeforeResolve() {
+  const env = runPopupTest({
+    pageScan: {
+      pageUrl: "https://www.bilibili.com/video/BV1demo/",
+      pageTitle: "Bilibili playinfo demo",
+      videoCount: 1,
+      streams: [
+        { url: "https://upos.example.test/random-segment.m4s", label: "Random DASH segment", isFragment: true },
+        {
+          url: "https://upos.example.test/video-1080.m4s",
+          label: "1080P playinfo",
+          height: 1080,
+          isFragment: false,
+          isBilibiliPlayInfo: true,
+          companionAudioUrl: "https://upos.example.test/audio.m4s"
+        }
+      ]
+    },
+    resolveResponse: []
+  });
+
+  await env.context.__initialRefresh;
+
+  const resolveCall = env.fetchCalls.find((call) => call.url.endsWith("/extension/videos/resolve"));
+  const body = JSON.parse(resolveCall.options.body);
+  assert(body.detectedStreams.length === 1, "only the Bilibili playinfo track should be preserved");
+  assert(body.detectedStreams[0].isBilibiliPlayInfo === true, "Bilibili playinfo track should not be filtered as a fragment");
+  assert(body.detectedStreams[0].url === "https://upos.example.test/video-1080.m4s", "Bilibili playinfo track URL should be sent");
+}
+
 async function testSelectedVideoStreamsArePreferred() {
   const selectedStream = { url: "https://cdn.example.test/selected.m3u8", label: "Selected HLS" };
   const pageStream = { url: "https://cdn.example.test/page.m3u8", label: "Page HLS" };
@@ -720,6 +750,7 @@ async function testCanceledJobStopsPolling() {
   await testImportSendsResolvedBilibiliApiCandidate();
   await testImportSendsSelectedNoteStyle();
   await testFragmentsAreFilteredBeforeResolve();
+  await testBilibiliPlayInfoTracksArePreservedBeforeResolve();
   await testSelectedVideoStreamsArePreferred();
   await testSelectedBlobStreamsDoNotOverridePageStreams();
   await testCanceledJobStopsPolling();

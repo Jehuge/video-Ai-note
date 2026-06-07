@@ -393,7 +393,8 @@ function uniqueStreams(streams) {
   return streams.filter((stream) => {
     if (!stream?.url || seen.has(stream.url)) return false;
     if (stream.isBlob || String(stream.url).startsWith("blob:")) return false;
-    if (stream.isFragment || isFragmentUrl(stream.url)) return false;
+    const isResolvedPageTrack = stream.isBilibiliPlayInfo || stream.isDouyinPageData;
+    if (!isResolvedPageTrack && (stream.isFragment || isFragmentUrl(stream.url))) return false;
     seen.add(stream.url);
     return true;
   });
