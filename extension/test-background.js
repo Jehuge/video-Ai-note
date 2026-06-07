@@ -52,6 +52,13 @@ webRequestCallback({
 
 webRequestCallback({
   tabId: 7,
+  url: "https://www.douyin.com/aweme/v1/playwm/?video_id=watermark",
+  type: "xmlhttprequest",
+  responseHeaders: [{ name: "content-type", value: "application/octet-stream" }]
+});
+
+webRequestCallback({
+  tabId: 7,
   url: "https://www.douyin.com/static/app.css",
   type: "stylesheet",
   responseHeaders: [{ name: "content-type", value: "text/css" }]
@@ -69,8 +76,9 @@ messageCallback({ type: "GET_DETECTED_STREAMS", tabId: 7 }, {}, (value) => {
   response = value;
 });
 
-assert(response.streams.length === 2, "Douyin play and CDN URLs should be remembered");
+assert(response.streams.length === 3, "Douyin play, playwm and CDN URLs should be remembered");
 assert(response.streams.some((stream) => stream.url.includes("/aweme/v1/play/")), "Douyin aweme play URL should be detected");
+assert(response.streams.some((stream) => stream.url.includes("/aweme/v1/playwm/")), "Douyin aweme playwm URL should be detected");
 assert(response.streams.some((stream) => stream.url.includes("douyinvod.com")), "Douyin CDN URL should be detected");
 assert(response.streams.every((stream) => stream.label === "Media stream"), "extensionless Douyin URLs should get a generic media label");
 

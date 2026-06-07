@@ -82,13 +82,28 @@ function cookieProbeUrls(pageUrl) {
     urls.push(parsed.href);
     const host = parsed.hostname.toLowerCase();
     if (host.endsWith("bilibili.com")) {
-      urls.push("https://www.bilibili.com/", "https://api.bilibili.com/");
+      urls.push(
+        "https://www.bilibili.com/",
+        "https://api.bilibili.com/",
+        "https://passport.bilibili.com/",
+        "https://t.bilibili.com/"
+      );
     }
     if (host.endsWith("douyin.com")) {
-      urls.push("https://www.douyin.com/", "https://v.douyin.com/");
+      urls.push(
+        "https://www.douyin.com/",
+        "https://v.douyin.com/",
+        "https://www.iesdouyin.com/",
+        "https://snssdk.com/"
+      );
     }
     if (host.endsWith("iesdouyin.com")) {
-      urls.push("https://www.iesdouyin.com/", "https://www.douyin.com/");
+      urls.push(
+        "https://www.iesdouyin.com/",
+        "https://www.douyin.com/",
+        "https://v.douyin.com/",
+        "https://snssdk.com/"
+      );
     }
   } catch (_) {
     return urls;

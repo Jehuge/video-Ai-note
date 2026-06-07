@@ -356,6 +356,9 @@ def _write_cookie_file(cookie: str = "", cookie_details: Optional[List[Dict[str,
     if cookie:
         domains = [
             ".bilibili.com",
+            ".api.bilibili.com",
+            ".passport.bilibili.com",
+            ".t.bilibili.com",
             ".douyin.com",
             ".v.douyin.com",
             ".iesdouyin.com",

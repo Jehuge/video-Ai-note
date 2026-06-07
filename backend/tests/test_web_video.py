@@ -223,8 +223,10 @@ class WebVideoServiceTests(unittest.TestCase):
 
             self.assertTrue(path.exists())
             self.assertIn(".bilibili.com\tTRUE\t/\tFALSE\t1893456000\tSESSDATA\tdemo", content)
+            self.assertIn(".passport.bilibili.com\tTRUE\t/\tFALSE\t1893456000\tSESSDATA\tdemo", content)
             self.assertIn(".douyin.com\tTRUE\t/\tFALSE\t1893456000\tmsToken\tabc", content)
             self.assertIn(".v.douyin.com\tTRUE\t/\tFALSE\t1893456000\tmsToken\tabc", content)
+            self.assertIn(".snssdk.com\tTRUE\t/\tFALSE\t1893456000\tmsToken\tabc", content)
 
         self.assertFalse(path.exists())
 

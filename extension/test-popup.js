@@ -266,6 +266,8 @@ async function testCookiesAreOptIn() {
   await env.context.__initialRefresh;
 
   assert(env.cookieCalls.some((call) => call.url === "https://api.bilibili.com/"), "bilibili API cookies should be read when enabled");
+  assert(env.cookieCalls.some((call) => call.url === "https://passport.bilibili.com/"), "bilibili passport cookies should be read when enabled");
+  assert(env.cookieCalls.some((call) => call.url === "https://t.bilibili.com/"), "bilibili social-domain cookies should be read when enabled");
   const resolveCall = env.fetchCalls.find((call) => call.url.endsWith("/extension/videos/resolve"));
   assert(resolveCall, "resolve call should be made");
   const body = JSON.parse(resolveCall.options.body);
@@ -329,6 +331,8 @@ async function testDouyinCookiesReadFreshCookieDomains() {
 
   assert(env.cookieCalls.some((call) => call.url === "https://www.douyin.com/"), "douyin web cookies should be read");
   assert(env.cookieCalls.some((call) => call.url === "https://v.douyin.com/"), "douyin short-link cookies should be read");
+  assert(env.cookieCalls.some((call) => call.url === "https://www.iesdouyin.com/"), "douyin ies cookies should be read");
+  assert(env.cookieCalls.some((call) => call.url === "https://snssdk.com/"), "douyin snssdk cookies should be read");
   const resolveCall = env.fetchCalls.find((call) => call.url.endsWith("/extension/videos/resolve"));
   const body = JSON.parse(resolveCall.options.body);
   assert(body.cookies.includes("s_v_web_id=fresh"), "resolve should include fresh Douyin visitor cookies");
