@@ -287,6 +287,144 @@ class WebVideoServiceTests(unittest.TestCase):
         self.assertEqual(candidate["formats"][0]["formatId"], "bilibili-playinfo")
         self.assertEqual(candidate["formats"][0]["height"], 1080)
 
+    def test_resolve_adds_bilibili_api_quality_fallback_when_logged_in(self):
+        class FakeYoutubeDL:
+            def __init__(self, _options):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def extract_info(self, url, **_kwargs):
+                return {
+                    "title": "Resolved",
+                    "webpage_url": url,
+                    "extractor": "BiliBili",
+                    "formats": [{"format_id": "64", "height": 480, "ext": "mp4"}],
+                }
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return self.payload
+
+        class FakeSession:
+            def __init__(self):
+                self.calls = []
+
+            def get(self, url, **kwargs):
+                self.calls.append((url, kwargs))
+                if url.endswith("/x/web-interface/view"):
+                    return FakeResponse({"code": 0, "data": {"cid": 987654, "title": "Bili API title", "duration": 10}})
+                if url.endswith("/x/web-interface/nav"):
+                    key = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ab"
+                    return FakeResponse({
+                        "code": 0,
+                        "data": {
+                            "isLogin": True,
+                            "wbi_img": {
+                                "img_url": f"https://i0.hdslb.com/bfs/wbi/{key[:32]}.png",
+                                "sub_url": f"https://i0.hdslb.com/bfs/wbi/{key[32:]}.png",
+                            },
+                        },
+                    })
+                if url.endswith("/x/player/wbi/playurl") and kwargs.get("params", {}).get("qn") == "80":
+                    return FakeResponse({
+                        "code": 0,
+                        "data": {
+                            "accept_quality": [80, 64],
+                            "support_formats": [
+                                {"quality": 80, "new_description": "1080P 高清"},
+                                {"quality": 64, "new_description": "720P 高清"},
+                            ],
+                            "dash": {
+                                "video": [
+                                    {
+                                        "id": 80,
+                                        "baseUrl": "https://upos.example.test/video-1080.m4s",
+                                        "height": 1080,
+                                        "width": 1920,
+                                        "bandwidth": 2000000,
+                                        "codecs": "avc1.640028",
+                                        "size": 123456,
+                                    },
+                                    {
+                                        "id": 64,
+                                        "baseUrl": "https://upos.example.test/video-720.m4s",
+                                        "height": 720,
+                                        "width": 1280,
+                                        "bandwidth": 1200000,
+                                        "codecs": "avc1.64001f",
+                                        "size": 78910,
+                                    },
+                                ],
+                                "audio": [{
+                                    "baseUrl": "https://upos.example.test/audio.m4s",
+                                    "bandwidth": 128000,
+                                    "codecs": "mp4a.40.2",
+                                }],
+                            },
+                        },
+                    })
+                if url.endswith("/x/player/wbi/playurl"):
+                    return FakeResponse({
+                        "code": 0,
+                        "data": {
+                            "accept_quality": [80, 64],
+                            "support_formats": [
+                                {"quality": 80, "new_description": "1080P 高清"},
+                                {"quality": 64, "new_description": "720P 高清"},
+                            ],
+                            "dash": {
+                                "video": [
+                                    {
+                                        "id": 64,
+                                        "baseUrl": "https://upos.example.test/video-720.m4s",
+                                        "height": 720,
+                                        "width": 1280,
+                                        "bandwidth": 1200000,
+                                        "codecs": "avc1.64001f",
+                                        "size": 78910,
+                                    },
+                                ],
+                                "audio": [{
+                                    "baseUrl": "https://upos.example.test/audio.m4s",
+                                    "bandwidth": 128000,
+                                    "codecs": "mp4a.40.2",
+                                }],
+                            },
+                        },
+                    })
+                raise AssertionError(f"unexpected URL {url}")
+
+        fake_session = FakeSession()
+        with mock.patch.dict(sys.modules, {"yt_dlp": types.SimpleNamespace(YoutubeDL=FakeYoutubeDL)}), \
+                mock.patch("requests.Session", return_value=fake_session):
+            result = web_video.resolve_web_video(
+                page_url="https://www.bilibili.com/video/BV1demo/",
+                cookie="SESSDATA=demo; bili_jct=csrf",
+            )
+
+        api_candidate = next(candidate for candidate in result["candidates"] if candidate["extractor"] == "bilibili-api")
+        self.assertEqual([fmt["formatId"] for fmt in api_candidate["formats"]], ["bilibili-api-80", "bilibili-api-64"])
+        self.assertEqual(api_candidate["formats"][0]["height"], 1080)
+        self.assertEqual(api_candidate["formats"][0]["sourceUrl"], "https://upos.example.test/video-1080.m4s")
+        self.assertEqual(api_candidate["formats"][0]["companionAudioUrl"], "https://upos.example.test/audio.m4s")
+        self.assertTrue(result["diagnostics"]["bilibiliApi"]["bilibiliApiLogin"])
+        self.assertEqual(result["diagnostics"]["bilibiliApi"]["bilibiliApiAcceptQuality"], [80, 64])
+        self.assertEqual(result["diagnostics"]["bilibiliApi"]["bilibiliApiFormatHeights"], [1080, 720])
+        self.assertEqual(result["diagnostics"]["maxHeight"], 1080)
+        self.assertTrue(any(call[1]["headers"]["Cookie"].startswith("SESSDATA=demo") for call in fake_session.calls))
+        self.assertTrue(any(call[1].get("params", {}).get("qn") == "80" for call in fake_session.calls))
+
     def test_choose_download_url_prefers_candidate_url(self):
         url = web_video._choose_download_url({
             "pageUrl": "https://example.test/page",
@@ -604,6 +742,66 @@ class WebVideoServiceTests(unittest.TestCase):
             updated = web_video.job_manager.get(job.job_id)
             self.assertEqual(updated.status, "completed")
             self.assertEqual(seen["payload"]["formatId"], "bilibili-playinfo")
+            self.assertTrue(list(upload_dir.glob(f"{updated.task_id}.mp4")))
+
+    def test_run_import_job_uses_bilibili_api_resolved_track(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            upload_dir = tmp_path / "uploads"
+            output_dir = tmp_path / "notes"
+            upload_dir.mkdir()
+            output_dir.mkdir()
+            downloaded = tmp_path / "merged.mp4"
+            downloaded.write_bytes(b"video")
+            seen = {}
+
+            def fake_download_direct(url, target_path, headers, job_id, label):
+                seen.setdefault("urls", []).append(url)
+                target_path.write_bytes(b"track")
+                return target_path
+
+            def fake_merge(video_path, audio_path, output_path, job_id):
+                seen["merge"] = (video_path.name, audio_path.name)
+                output_path.write_bytes(b"merged")
+                return downloaded
+
+            with mock.patch.object(web_video, "UPLOAD_DIR", upload_dir), \
+                    mock.patch.object(web_video, "NOTE_OUTPUT_DIR", output_dir), \
+                    mock.patch.object(web_video, "_download_direct_url", side_effect=fake_download_direct), \
+                    mock.patch.object(web_video, "_merge_video_audio", side_effect=fake_merge), \
+                    mock.patch.object(web_video, "_download_with_ytdlp", side_effect=AssertionError("yt-dlp should not run")), \
+                    mock.patch.object(web_video, "load_active_model_config", return_value={}), \
+                    mock.patch.object(web_video, "create_task"):
+                job = web_video.job_manager.create("https://www.bilibili.com/video/BV1demo/")
+                web_video._run_import_job(job.job_id, {
+                    "pageUrl": "https://www.bilibili.com/video/BV1demo/",
+                    "pageTitle": "Bili",
+                    "candidateId": "bilibili-api-BV1demo",
+                    "candidateUrl": "https://www.bilibili.com/video/BV1demo/",
+                    "formatId": "bilibili-api-80",
+                    "resolvedCandidates": [{
+                        "id": "bilibili-api-BV1demo",
+                        "sourceUrl": "https://www.bilibili.com/video/BV1demo/",
+                        "formats": [{
+                            "formatId": "bilibili-api-80",
+                            "sourceUrl": "https://upos.example.test/video-1080.m4s",
+                            "companionAudioUrl": "https://upos.example.test/audio.m4s",
+                        }, {
+                            "formatId": "bilibili-api-64",
+                            "sourceUrl": "https://upos.example.test/video-720.m4s",
+                            "companionAudioUrl": "https://upos.example.test/audio.m4s",
+                        }],
+                    }],
+                    "autoRun": False,
+                })
+
+            updated = web_video.job_manager.get(job.job_id)
+            self.assertEqual(updated.status, "completed")
+            self.assertEqual(seen["urls"], [
+                "https://upos.example.test/video-1080.m4s",
+                "https://upos.example.test/audio.m4s",
+            ])
+            self.assertEqual(seen["merge"], ("web_" + job.job_id + ".video.m4s", "web_" + job.job_id + ".audio.m4s"))
             self.assertTrue(list(upload_dir.glob(f"{updated.task_id}.mp4")))
 
     def test_normalize_douyin_share_url(self):

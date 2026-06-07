@@ -175,11 +175,18 @@ function formatDiagnostics(diagnostics) {
 
   const receivedCookies = diagnostics.receivedCookies || {};
   const ytDlpCookies = diagnostics.ytDlpCookies || {};
+  const bilibiliApi = diagnostics.bilibiliApi || {};
   const kind = hostKind();
   if (kind === "bilibili") {
     parts.push(receivedCookies.bilibiliSessdata ? "AInote 已收到 SESSDATA" : "AInote 未收到 SESSDATA");
     if (receivedCookies.bilibiliSessdata) {
       parts.push(ytDlpCookies.bilibiliSessdata === false ? "yt-dlp 未识别登录态" : "yt-dlp 已识别登录态");
+    }
+    if (bilibiliApi.bilibiliApiFormatHeights?.length) {
+      parts.push(`B站 API ${Math.max(...bilibiliApi.bilibiliApiFormatHeights)}p`);
+    }
+    if (bilibiliApi.bilibiliApiLogin === false) {
+      parts.push("B站 API 未登录");
     }
   } else if (kind === "douyin") {
     parts.push(receivedCookies.douyinFresh ? "AInote 已收到抖音 fresh cookie" : "AInote 未收到抖音 fresh cookie");
@@ -487,6 +494,7 @@ async function importSelected() {
       candidateId: candidate.id,
       candidateUrl: candidate.sourceUrl,
       formatId: els.format.value,
+      resolvedCandidates: [candidate],
       noteStyle: els.noteStyle?.value || "simple",
       autoRun: els.autoRun.checked,
       screenshot: els.screenshot.checked,

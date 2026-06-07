@@ -7,13 +7,12 @@ const popupSource = fs
   .replace(/\nrefresh\(\);\s*$/, "\nglobalThis.__initialRefresh = refresh();");
 
 function createElement(id) {
-  return {
+  const element = {
     id,
     textContent: "",
     value: "",
     checked: false,
     disabled: false,
-    innerHTML: "",
     style: {},
     children: [],
     classList: {
@@ -35,6 +34,18 @@ function createElement(id) {
     },
     addEventListener() {}
   };
+  Object.defineProperty(element, "innerHTML", {
+    get() {
+      return "";
+    },
+    set(value) {
+      if (value === "") {
+        this.children = [];
+        this.value = "";
+      }
+    }
+  });
+  return element;
 }
 
 function runPopupTest({
@@ -275,6 +286,10 @@ async function testResolveDiagnosticsAreShown() {
         extractors: ["BiliBili"],
         receivedCookies: { bilibiliSessdata: true },
         ytDlpCookies: { bilibiliSessdata: false },
+        bilibiliApi: {
+          bilibiliApiLogin: true,
+          bilibiliApiFormatHeights: [1080, 720]
+        },
         ytDlpMessages: ["Format(s) 1080P are missing; you have to become a premium member"]
       }
     }
@@ -285,6 +300,7 @@ async function testResolveDiagnosticsAreShown() {
   assert(env.elements.diagnostics.textContent.includes("最高 480p"), "diagnostics should show max resolved height");
   assert(env.elements.diagnostics.textContent.includes("AInote 已收到 SESSDATA"), "diagnostics should show backend cookie receipt");
   assert(env.elements.diagnostics.textContent.includes("yt-dlp 未识别登录态"), "diagnostics should show yt-dlp cookie state");
+  assert(env.elements.diagnostics.textContent.includes("B站 API 1080p"), "diagnostics should show bilibili API max height");
   assert(env.elements.diagnostics.textContent.includes("premium member"), "diagnostics should show yt-dlp quality warnings");
   assert(env.elements.diagnostics.textContent.includes("BiliBili"), "diagnostics should show extractor name");
 }
@@ -402,6 +418,51 @@ async function testImportSendsCandidateUrl() {
   const body = JSON.parse(importCall.options.body);
   assert(body.candidateId === "page-url", "import should send selected candidate id");
   assert(body.candidateUrl === "https://www.bilibili.com/video/BV1demo/", "import should send selected candidate url");
+  assert(body.resolvedCandidates.length === 1, "import should send selected resolved candidate");
+}
+
+async function testImportSendsResolvedBilibiliApiCandidate() {
+  const env = runPopupTest({
+    pageScan: {
+      pageUrl: "https://www.bilibili.com/video/BV1demo/",
+      pageTitle: "Bilibili demo",
+      videoCount: 1,
+      streams: []
+    },
+    resolveResponse: {
+      candidates: [{
+        id: "bilibili-api-BV1demo",
+        title: "Bilibili demo",
+        sourceUrl: "https://www.bilibili.com/video/BV1demo/",
+        extractor: "bilibili-api",
+        formats: [{
+          formatId: "bilibili-api-80",
+          label: "1080P 高清 1080p avc1",
+          height: 1080,
+          sourceUrl: "https://upos.example.test/video-1080.m4s",
+          companionAudioUrl: "https://upos.example.test/audio.m4s"
+        }, {
+          formatId: "bilibili-api-64",
+          label: "720P 高清 720p avc1",
+          height: 720,
+          sourceUrl: "https://upos.example.test/video-720.m4s",
+          companionAudioUrl: "https://upos.example.test/audio.m4s"
+        }]
+      }]
+    }
+  });
+
+  await env.context.__initialRefresh;
+  env.elements.format.value = "bilibili-api-80";
+  await env.context.importSelected();
+  await flush();
+
+  const importCall = env.fetchCalls.find((call) => call.url.endsWith("/extension/videos/import"));
+  const body = JSON.parse(importCall.options.body);
+  assert(body.formatId === "bilibili-api-80", "import should send selected Bilibili API format");
+  assert(body.resolvedCandidates[0].id === "bilibili-api-BV1demo", "import should include resolved Bilibili API candidate");
+  assert(body.resolvedCandidates[0].formats[0].sourceUrl === "https://upos.example.test/video-1080.m4s", "import should include selected video track URL data");
+  assert(body.resolvedCandidates[0].formats[0].companionAudioUrl === "https://upos.example.test/audio.m4s", "import should include companion audio URL data");
 }
 
 async function testImportSendsSelectedNoteStyle() {
@@ -546,6 +607,7 @@ async function testCanceledJobStopsPolling() {
   await testBilibiliMissingSessdataWarnsAboutLowQuality();
   await testDouyinCookiesReadFreshCookieDomains();
   await testImportSendsCandidateUrl();
+  await testImportSendsResolvedBilibiliApiCandidate();
   await testImportSendsSelectedNoteStyle();
   await testFragmentsAreFilteredBeforeResolve();
   await testSelectedVideoStreamsArePreferred();

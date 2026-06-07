@@ -5,11 +5,13 @@ import subprocess
 import tempfile
 import threading
 import uuid
+import hashlib
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlencode, urlparse, urlunparse
 
 from app.db.video_task_dao import create_task, get_task_by_id, update_task_status
 from app.services.model_settings import load_active_model_config
@@ -61,6 +63,13 @@ YTDLP_DIAGNOSTIC_MARKERS = (
     "http error 403",
     "http error 412",
 )
+BILIBILI_BVID_PATTERN = re.compile(r"(BV[0-9A-Za-z]+)", re.IGNORECASE)
+BILIBILI_MIXIN_KEY_ENC_TAB = [
+    46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49,
+    33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40,
+    61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11,
+    36, 20, 34, 44, 52,
+]
 
 
 @dataclass
@@ -556,6 +565,275 @@ def _dedupe_candidates(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     return deduped
 
 
+def _bilibili_bvid_from_url(url: str) -> Optional[str]:
+    try:
+        parsed = urlparse(url or "")
+    except Exception:
+        return None
+    if not parsed.netloc.lower().endswith("bilibili.com"):
+        return None
+    match = BILIBILI_BVID_PATTERN.search(parsed.path) or BILIBILI_BVID_PATTERN.search(parsed.query)
+    return match.group(1) if match else None
+
+
+def _bilibili_headers(headers: Optional[Dict[str, str]] = None, referer: str = "") -> Dict[str, str]:
+    result = dict(DEFAULT_BROWSER_HEADERS)
+    result["Accept"] = "application/json, text/plain, */*"
+    result["Origin"] = "https://www.bilibili.com"
+    result["Referer"] = referer or "https://www.bilibili.com/"
+    for key, value in (headers or {}).items():
+        if value and key.lower() not in {"cookie", "set-cookie", "authorization"}:
+            result[key] = value
+    return result
+
+
+def _cookie_header_from_details(cookie: Optional[str], cookie_details: Optional[List[Dict[str, Any]]]) -> str:
+    pairs: Dict[str, str] = {}
+    for item in cookie_details or []:
+        name = str(item.get("name") or "").strip()
+        value = str(item.get("value") or "")
+        if name:
+            pairs[name] = value
+    for item in (cookie or "").split(";"):
+        if "=" not in item:
+            continue
+        name, value = item.strip().split("=", 1)
+        if name:
+            pairs[name] = value
+    return "; ".join(f"{name}={value}" for name, value in pairs.items())
+
+
+def _bilibili_wbi_key(nav_data: Dict[str, Any]) -> Optional[str]:
+    wbi_img = ((nav_data.get("data") or {}).get("wbi_img") or {})
+    lookup = "".join(
+        str(wbi_img.get(key) or "").rsplit("/", 1)[-1].split(".", 1)[0]
+        for key in ("img_url", "sub_url")
+    )
+    if len(lookup) <= max(BILIBILI_MIXIN_KEY_ENC_TAB):
+        return None
+    return "".join(lookup[index] for index in BILIBILI_MIXIN_KEY_ENC_TAB)[:32]
+
+
+def _bilibili_sign_wbi(params: Dict[str, Any], mixin_key: str) -> Dict[str, Any]:
+    signed = dict(params)
+    signed["wts"] = round(time.time())
+    filtered = {
+        key: "".join(char for char in str(value) if char not in "!'()*")
+        for key, value in sorted(signed.items())
+    }
+    query = urlencode(filtered)
+    filtered["w_rid"] = hashlib.md5(f"{query}{mixin_key}".encode()).hexdigest()
+    return filtered
+
+
+def _bilibili_playinfo_formats(play_info: Dict[str, Any]) -> List[Dict[str, Any]]:
+    support_names = {
+        item.get("quality"): item.get("new_description") or item.get("display_desc")
+        for item in play_info.get("support_formats") or []
+        if item.get("quality")
+    }
+    audios = [
+        *(play_info.get("dash", {}).get("audio") or []),
+        *(play_info.get("dash", {}).get("dolby", {}).get("audio") or []),
+    ]
+    flac_audio = play_info.get("dash", {}).get("flac", {}).get("audio")
+    if flac_audio:
+        audios.append(flac_audio)
+
+    best_audio = sorted(
+        [
+            {
+                "url": audio.get("baseUrl") or audio.get("base_url") or audio.get("url") or "",
+                "bandwidth": int(audio.get("bandwidth") or 0),
+                "mimeType": audio.get("mimeType") or audio.get("mime_type") or "audio/mp4",
+                "codecs": audio.get("codecs") or "",
+            }
+            for audio in audios
+        ],
+        key=lambda item: item["bandwidth"],
+        reverse=True,
+    )
+    companion_audio = best_audio[0] if best_audio else {}
+
+    formats = []
+    seen = set()
+    for video in play_info.get("dash", {}).get("video") or []:
+        url = video.get("baseUrl") or video.get("base_url") or video.get("url") or ""
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        height = int(video.get("height") or 0) or None
+        quality_id = video.get("id")
+        description = support_names.get(quality_id)
+        codecs = video.get("codecs") or ""
+        base_label = description or (f"{height}p" if height else quality_id or "B站清晰度")
+        label_parts = [str(base_label)]
+        if height and not str(label_parts[0]).lower().startswith(str(height)):
+            label_parts.append(f"{height}p")
+        if codecs:
+            label_parts.append(codecs)
+        formats.append({
+            "url": url,
+            "format": " ".join(str(part) for part in label_parts if part),
+            "height": height,
+            "width": int(video.get("width") or 0) or None,
+            "ext": "mp4",
+            "filesize": _format_filesize(video.get("size")),
+            "protocol": "bilibili-dash",
+            "bandwidth": int(video.get("bandwidth") or 0) or None,
+            "quality": quality_id,
+            "codecs": codecs,
+            "companionAudioUrl": companion_audio.get("url") or "",
+            "companionAudioMimeType": companion_audio.get("mimeType") or "",
+            "companionAudioCodecs": companion_audio.get("codecs") or "",
+        })
+    return sorted(formats, key=lambda item: (item.get("height") or 0, item.get("bandwidth") or 0), reverse=True)
+
+
+def _merge_bilibili_playinfos(play_infos: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not play_infos:
+        return {}
+
+    merged = dict(play_infos[0])
+    dash = dict(merged.get("dash") or {})
+    seen_video_urls = set()
+    seen_audio_urls = set()
+    videos = []
+    audios = []
+
+    def add_unique(items: List[Dict[str, Any]], seen: set, target: List[Dict[str, Any]]) -> None:
+        for item in items or []:
+            url = item.get("baseUrl") or item.get("base_url") or item.get("url")
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            target.append(item)
+
+    for info in play_infos:
+        info_dash = info.get("dash") or {}
+        add_unique(info_dash.get("video") or [], seen_video_urls, videos)
+        add_unique(info_dash.get("audio") or [], seen_audio_urls, audios)
+
+    dash["video"] = videos
+    dash["audio"] = audios
+    merged["dash"] = dash
+    accept_quality = []
+    for info in play_infos:
+        for quality in info.get("accept_quality") or []:
+            if quality not in accept_quality:
+                accept_quality.append(quality)
+    if accept_quality:
+        merged["accept_quality"] = accept_quality
+    return merged
+
+
+def _bilibili_api_candidates(page_url: str, page_title: str = "", headers: Optional[Dict[str, str]] = None,
+                             cookie: Optional[str] = None, cookie_details: Optional[List[Dict[str, Any]]] = None,
+                             diagnostics: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    bvid = _bilibili_bvid_from_url(page_url)
+    if not bvid or "SESSDATA" not in _cookie_names(cookie, cookie_details):
+        return []
+
+    import requests
+
+    session = requests.Session()
+    request_headers = _bilibili_headers(headers, referer=page_url)
+    cookie_header = _cookie_header_from_details(cookie, cookie_details)
+    if cookie_header:
+        request_headers["Cookie"] = cookie_header
+
+    view_response = session.get(
+        "https://api.bilibili.com/x/web-interface/view",
+        params={"bvid": bvid},
+        headers=request_headers,
+        timeout=15,
+    )
+    view_response.raise_for_status()
+    view_data = view_response.json()
+    if view_data.get("code") not in {0, None}:
+        raise RuntimeError(f"Bilibili view API failed: {view_data.get('code')} {view_data.get('message')}")
+    view = view_data.get("data") or {}
+    cid = view.get("cid")
+    if not cid:
+        return []
+
+    nav_response = session.get(
+        "https://api.bilibili.com/x/web-interface/nav",
+        headers=request_headers,
+        timeout=15,
+    )
+    nav_response.raise_for_status()
+    nav_data = nav_response.json()
+    mixin_key = _bilibili_wbi_key(nav_data)
+    if diagnostics is not None:
+        diagnostics["bilibiliApiLogin"] = nav_data.get("code") == 0 and bool((nav_data.get("data") or {}).get("isLogin"))
+    if not mixin_key:
+        raise RuntimeError("Bilibili WBI key was not returned")
+
+    playurl_endpoint = "https://api.bilibili.com/x/player/wbi/playurl"
+
+    def request_playinfo(extra_params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        params = _bilibili_sign_wbi({"bvid": bvid, "cid": cid, "fnval": 4048, "fourk": 1, **(extra_params or {})}, mixin_key)
+        play_response = session.get(
+            playurl_endpoint,
+            params=params,
+            headers=request_headers,
+            timeout=15,
+        )
+        play_response.raise_for_status()
+        play_data = play_response.json()
+        if play_data.get("code") not in {0, None}:
+            raise RuntimeError(f"Bilibili playurl API failed: {play_data.get('code')} {play_data.get('message')}")
+        return play_data.get("data") or {}
+
+    play_infos = [request_playinfo()]
+    existing_qualities = {video.get("id") for video in (play_infos[0].get("dash", {}).get("video") or [])}
+    for quality in play_infos[0].get("accept_quality") or []:
+        if quality in existing_qualities:
+            continue
+        try:
+            quality_play_info = request_playinfo({"qn": quality})
+        except Exception as exc:
+            logger.warning("Bilibili playurl qn=%s failed: %s", quality, exc)
+            continue
+        play_infos.append(quality_play_info)
+        existing_qualities.update(video.get("id") for video in (quality_play_info.get("dash", {}).get("video") or []))
+
+    play_info = _merge_bilibili_playinfos(play_infos)
+    formats = _bilibili_playinfo_formats(play_info)
+    if diagnostics is not None:
+        diagnostics["bilibiliApiAcceptQuality"] = play_info.get("accept_quality") or []
+        diagnostics["bilibiliApiFormatHeights"] = [fmt.get("height") for fmt in formats if fmt.get("height")]
+    if not formats:
+        return []
+
+    return [{
+        "id": f"bilibili-api-{bvid}",
+        "title": view.get("title") or page_title or "Bilibili video",
+        "sourceUrl": page_url,
+        "extractor": "bilibili-api",
+        "duration": view.get("duration"),
+        "thumbnail": view.get("pic"),
+        "formats": [
+            {
+                "formatId": f"bilibili-api-{fmt.get('quality') or fmt.get('height') or index}",
+                "label": fmt.get("format") or _format_label(fmt),
+                "height": fmt.get("height"),
+                "ext": fmt.get("ext") or "mp4",
+                "filesize": fmt.get("filesize"),
+                "protocol": fmt.get("protocol"),
+                "bandwidth": fmt.get("bandwidth"),
+                "codecs": fmt.get("codecs"),
+                "sourceUrl": fmt.get("url"),
+                "companionAudioUrl": fmt.get("companionAudioUrl") or "",
+                "companionAudioMimeType": fmt.get("companionAudioMimeType") or "",
+                "companionAudioCodecs": fmt.get("companionAudioCodecs") or "",
+            }
+            for index, fmt in enumerate(formats, start=1)
+        ],
+    }]
+
+
 def _cookie_names(cookie: Optional[str] = None, cookie_details: Optional[List[Dict[str, Any]]] = None) -> set:
     names = set()
     for item in cookie_details or []:
@@ -576,7 +854,8 @@ def _candidate_diagnostics(candidates: List[Dict[str, Any]], errors: List[str],
                            cookie_details: Optional[List[Dict[str, Any]]] = None,
                            detected_streams: Optional[List[Dict[str, Any]]] = None,
                            yt_dlp_messages: Optional[List[str]] = None,
-                           yt_dlp_cookies: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                           yt_dlp_cookies: Optional[Dict[str, Any]] = None,
+                           bilibili_api: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     cookie_names = _cookie_names(cookie, cookie_details)
     format_count = 0
     max_height = None
@@ -606,6 +885,7 @@ def _candidate_diagnostics(candidates: List[Dict[str, Any]], errors: List[str],
         },
         "ytDlpCookies": yt_dlp_cookies or {},
         "ytDlpMessages": list(yt_dlp_messages or [])[:6],
+        "bilibiliApi": bilibili_api or {},
         "errorCount": len(errors),
     }
 
@@ -697,6 +977,7 @@ def resolve_web_video(page_url: str, page_title: str = "", detected_streams: Opt
     errors = []
     yt_dlp_messages: List[str] = []
     yt_dlp_cookie_diagnostics: Dict[str, Any] = {}
+    bilibili_api_diagnostics: Dict[str, Any] = {}
 
     if page_url:
         try:
@@ -712,6 +993,19 @@ def resolve_web_video(page_url: str, page_title: str = "", detected_streams: Opt
             ))
         except Exception as exc:
             errors.append(f"page: {exc}")
+            _append_unique_diagnostic(yt_dlp_messages, str(exc))
+
+        try:
+            candidates.extend(_bilibili_api_candidates(
+                _normalize_page_url(page_url),
+                page_title=page_title,
+                headers=headers,
+                cookie=cookie,
+                cookie_details=cookie_details,
+                diagnostics=bilibili_api_diagnostics,
+            ))
+        except Exception as exc:
+            errors.append(f"bilibili-api: {exc}")
             _append_unique_diagnostic(yt_dlp_messages, str(exc))
 
     fallback_streams = []
@@ -759,6 +1053,7 @@ def resolve_web_video(page_url: str, page_title: str = "", detected_streams: Opt
         detected_streams=detected_streams,
         yt_dlp_messages=yt_dlp_messages,
         yt_dlp_cookies=yt_dlp_cookie_diagnostics,
+        bilibili_api=bilibili_api_diagnostics,
     )
 
     return {
@@ -884,14 +1179,29 @@ def _merge_video_audio(video_path: Path, audio_path: Path, output_path: Path, jo
 
 def _download_bilibili_playinfo(job_id: str, payload: Dict[str, Any]) -> Path:
     video_url = payload.get("candidateUrl") or payload.get("candidate_url")
-    if not video_url:
-        raise ValueError("No Bilibili video track URL was provided")
     audio_url = ""
     candidate_id = payload.get("candidateId") or payload.get("candidate_id")
+    format_id = payload.get("formatId") or payload.get("format_id")
     for candidate in _normalize_detected_streams(payload.get("detectedStreams") or [], payload.get("pageTitle") or ""):
         if candidate["id"] == candidate_id or candidate["sourceUrl"] == video_url:
             audio_url = candidate.get("companionAudioUrl") or ""
             break
+    for candidate in (payload.get("resolvedCandidates") or payload.get("resolved_candidates") or []):
+        if candidate.get("id") != candidate_id and candidate.get("sourceUrl") != video_url:
+            continue
+        for fmt in candidate.get("formats") or []:
+            candidate_format_id = str(fmt.get("formatId") or "")
+            if (
+                format_id
+                and candidate_format_id != str(format_id)
+                and not (str(format_id) == "bilibili-api" and candidate_format_id.startswith("bilibili-api"))
+            ):
+                continue
+            video_url = fmt.get("sourceUrl") or fmt.get("url") or video_url
+            audio_url = fmt.get("companionAudioUrl") or audio_url
+            break
+    if not video_url:
+        raise ValueError("No Bilibili video track URL was provided")
     if not audio_url:
         raise ValueError("No Bilibili audio track was found for the selected video quality")
 
@@ -943,7 +1253,8 @@ def _payload_note_style(payload: Dict[str, Any], default: str = "simple") -> str
 def _run_import_job(job_id: str, payload: Dict[str, Any]) -> None:
     downloaded_path: Optional[Path] = None
     try:
-        if (payload.get("formatId") or payload.get("format_id")) == "bilibili-playinfo":
+        format_id = str(payload.get("formatId") or payload.get("format_id") or "")
+        if format_id == "bilibili-playinfo" or format_id.startswith("bilibili-api"):
             downloaded_path = _download_bilibili_playinfo(job_id, payload)
         else:
             downloaded_path = _download_with_ytdlp(job_id, payload)

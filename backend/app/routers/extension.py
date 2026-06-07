@@ -55,6 +55,7 @@ class ImportRequest(ResolveRequest):
     candidateId: Optional[str] = None
     candidateUrl: Optional[str] = None
     formatId: Optional[str] = None
+    resolvedCandidates: List[Dict[str, Any]] = Field(default_factory=list)
     noteStyle: Optional[str] = "simple"
     autoRun: bool = True
     screenshot: bool = False
