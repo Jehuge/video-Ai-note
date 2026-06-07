@@ -63,8 +63,9 @@ const context = {
     language: "zh-CN"
   },
   location: {
-    href: "https://site.example.test/watch",
-    origin: "https://site.example.test"
+    href: "https://www.bilibili.com/video/BV1demo/",
+    origin: "https://www.bilibili.com",
+    hostname: "www.bilibili.com"
   },
   document: {
     title: "Picker demo",
@@ -73,6 +74,9 @@ const context = {
     scripts: [
       {
         textContent: 'window.__DATA__={"play_addr":{"url_list":["https:\\/\\/www.douyin.com\\/aweme\\/v1\\/play\\/?video_id=abc","https:\\/\\/www.douyin.com\\/aweme\\/v1\\/playwm\\/?video_id=wm","https:\\/\\/v3-dy-o.douyinvod.com\\/tos-cn-ve-15\\/abc\\/video"]},"video":{"bitrateInfo":[{"PlayAddr":{"UrlList":["https:\\u002F\\u002Fv3-dy-o.douyinvod.com\\u002Ftos-cn-ve-15\\u002Fabc\\u002Fbitrate-video?mime_type=video_mp4\\u0026a=b"]}}]}}'
+      },
+      {
+        textContent: 'window.__playinfo__={"code":0,"data":{"dash":{"video":[{"baseUrl":"https://upos.example.test/video-1080.m4s","height":1080,"width":1920,"bandwidth":2000000,"codecs":"avc1.640028","mimeType":"video/mp4"},{"baseUrl":"https://upos.example.test/video-480.m4s","height":480,"width":852,"bandwidth":800000,"codecs":"avc1.64001f","mimeType":"video/mp4"}],"audio":[{"baseUrl":"https://upos.example.test/audio.m4s","bandwidth":128000,"codecs":"mp4a.40.2","mimeType":"audio/mp4"}]}}};'
       }
     ],
     createElement: (tag) => createElement(tag),
@@ -128,7 +132,7 @@ listeners.message({ type: "SCAN_PAGE_VIDEOS" }, null, (value) => {
   scanResponse = value;
 });
 assert(scanResponse.headers["User-Agent"] === "Chrome Test", "scan should include browser user agent");
-assert(scanResponse.headers.Referer === "https://site.example.test/watch", "scan should include referer");
+assert(scanResponse.headers.Referer === "https://www.bilibili.com/video/BV1demo/", "scan should include referer");
 assert(
   scanResponse.streams.some((stream) => stream.url.includes("/aweme/v1/play/?video_id=abc")),
   "scan should collect embedded Douyin play URLs"
@@ -145,5 +149,10 @@ assert(
   scanResponse.streams.some((stream) => stream.url.includes("douyinvod.com/tos-cn-ve-15/abc/bitrate-video")),
   "scan should collect escaped Douyin bitrate URLs"
 );
+const biliStream = scanResponse.streams.find((stream) => stream.url === "https://upos.example.test/video-1080.m4s");
+assert(biliStream, "scan should collect Bilibili page playinfo video track");
+assert(biliStream.source === "bilibili-playinfo", "Bilibili playinfo stream should be tagged");
+assert(biliStream.height === 1080, "Bilibili playinfo stream should keep height");
+assert(biliStream.companionAudioUrl === "https://upos.example.test/audio.m4s", "Bilibili playinfo stream should include companion audio");
 
 console.log("extension content picker tests passed");

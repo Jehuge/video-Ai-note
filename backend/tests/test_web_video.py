@@ -208,6 +208,44 @@ class WebVideoServiceTests(unittest.TestCase):
             ],
         )
 
+    def test_resolve_preserves_bilibili_playinfo_companion_audio(self):
+        class FakeYoutubeDL:
+            def __init__(self, _options):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def extract_info(self, *_args, **_kwargs):
+                raise RuntimeError("unsupported site")
+
+        with mock.patch.dict(sys.modules, {"yt_dlp": types.SimpleNamespace(YoutubeDL=FakeYoutubeDL)}):
+            result = web_video.resolve_web_video(
+                page_url="https://www.bilibili.com/video/BV1demo/",
+                page_title="Bili",
+                detected_streams=[
+                    {
+                        "url": "https://upos.example.test/video-1080.m4s",
+                        "source": "bilibili-playinfo",
+                        "label": "1080p B站页面轨道",
+                        "mimeType": "video/mp4",
+                        "height": 1080,
+                        "isBilibiliPlayInfo": True,
+                        "companionAudioUrl": "https://upos.example.test/audio.m4s",
+                    }
+                ],
+            )
+
+        candidate = result["candidates"][0]
+        self.assertEqual(candidate["extractor"], "bilibili-playinfo")
+        self.assertEqual(candidate["sourceUrl"], "https://upos.example.test/video-1080.m4s")
+        self.assertEqual(candidate["companionAudioUrl"], "https://upos.example.test/audio.m4s")
+        self.assertEqual(candidate["formats"][0]["formatId"], "bilibili-playinfo")
+        self.assertEqual(candidate["formats"][0]["height"], 1080)
+
     def test_choose_download_url_prefers_candidate_url(self):
         url = web_video._choose_download_url({
             "pageUrl": "https://example.test/page",
@@ -420,6 +458,42 @@ class WebVideoServiceTests(unittest.TestCase):
             self.assertTrue(seen["cookiefile_exists"])
             self.assertIn(".bilibili.com\tTRUE\t/\tTRUE\t1924992000\tSESSDATA\tdemo", seen["cookiefile_content"])
             self.assertFalse(Path(seen["cookiefile"]).exists())
+
+    def test_run_import_job_uses_bilibili_playinfo_downloader(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            upload_dir = tmp_path / "uploads"
+            output_dir = tmp_path / "notes"
+            upload_dir.mkdir()
+            output_dir.mkdir()
+            downloaded = tmp_path / "merged.mp4"
+            downloaded.write_bytes(b"video")
+            seen = {}
+
+            def fake_download(job_id, payload):
+                seen["job_id"] = job_id
+                seen["payload"] = payload
+                return downloaded
+
+            with mock.patch.object(web_video, "UPLOAD_DIR", upload_dir), \
+                    mock.patch.object(web_video, "NOTE_OUTPUT_DIR", output_dir), \
+                    mock.patch.object(web_video, "_download_bilibili_playinfo", side_effect=fake_download), \
+                    mock.patch.object(web_video, "_download_with_ytdlp", side_effect=AssertionError("yt-dlp should not run")), \
+                    mock.patch.object(web_video, "load_active_model_config", return_value={}), \
+                    mock.patch.object(web_video, "create_task"):
+                job = web_video.job_manager.create("https://www.bilibili.com/video/BV1demo/")
+                web_video._run_import_job(job.job_id, {
+                    "pageUrl": "https://www.bilibili.com/video/BV1demo/",
+                    "pageTitle": "Bili",
+                    "candidateUrl": "https://upos.example.test/video-1080.m4s",
+                    "formatId": "bilibili-playinfo",
+                    "autoRun": False,
+                })
+
+            updated = web_video.job_manager.get(job.job_id)
+            self.assertEqual(updated.status, "completed")
+            self.assertEqual(seen["payload"]["formatId"], "bilibili-playinfo")
+            self.assertTrue(list(upload_dir.glob(f"{updated.task_id}.mp4")))
 
     def test_normalize_douyin_share_url(self):
         self.assertEqual(

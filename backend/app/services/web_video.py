@@ -1,6 +1,7 @@
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 import threading
 import uuid
@@ -260,32 +261,37 @@ def _normalize_detected_streams(streams: List[Dict[str, Any]], page_title: str =
             continue
         if url.startswith("blob:"):
             continue
-        if _is_fragment_stream(stream):
+        if _is_fragment_stream(stream) and not stream.get("isBilibiliPlayInfo"):
             continue
         seen.add(url)
 
         parsed = urlparse(url)
         suffix = _stream_suffix(url)
         mime = _stream_mime(stream)
-        if not _is_probable_media_url(url, mime):
+        if not stream.get("isBilibiliPlayInfo") and not _is_probable_media_url(url, mime):
             continue
 
         ext = suffix.lstrip(".") if suffix else (stream.get("ext") or ("m3u8" if _is_manifest_stream(stream) else "mp4"))
         protocol = _stream_protocol(stream)
 
         label = _stream_label(stream, index)
+        format_id = "bilibili-playinfo" if stream.get("isBilibiliPlayInfo") else "detected"
+        extractor = "bilibili-playinfo" if stream.get("isBilibiliPlayInfo") else "browser-detected"
         normalized.append({
             "id": _stream_id(url),
             "title": page_title or parsed.netloc or "Detected video",
             "sourceUrl": url,
-            "extractor": "browser-detected",
+            "extractor": extractor,
+            "companionAudioUrl": stream.get("companionAudioUrl") or "",
             "formats": [{
-                "formatId": "detected",
+                "formatId": format_id,
                 "label": label,
                 "height": stream.get("height"),
                 "ext": ext,
                 "filesize": _format_filesize(stream.get("filesize") or stream.get("size")),
                 "protocol": protocol,
+                "bandwidth": stream.get("bandwidth"),
+                "codecs": stream.get("codecs"),
             }],
         })
     return normalized
@@ -620,7 +626,7 @@ def resolve_web_video(page_url: str, page_title: str = "", detected_streams: Opt
     seen_stream_urls = set()
     for stream in detected_streams or []:
         url = (stream.get("url") or "").strip()
-        if not url or url.startswith("blob:") or _is_fragment_stream(stream):
+        if not url or url.startswith("blob:") or (_is_fragment_stream(stream) and not stream.get("isBilibiliPlayInfo")):
             continue
         if url in seen_stream_urls:
             continue
@@ -731,6 +737,89 @@ def _download_with_ytdlp(job_id: str, payload: Dict[str, Any]) -> Path:
     return matches[0]
 
 
+def _download_direct_url(url: str, target_path: Path, headers: Dict[str, str], job_id: str,
+                         label: str = "Downloading media track") -> Path:
+    import requests
+
+    job_manager.update(job_id, status="downloading", progress=8, message=label)
+    with requests.get(url, headers=headers, stream=True, timeout=30) as response:
+        response.raise_for_status()
+        total = int(response.headers.get("content-length") or 0)
+        downloaded = 0
+        with target_path.open("wb") as handle:
+            for chunk in response.iter_content(chunk_size=1024 * 512):
+                if not chunk:
+                    continue
+                handle.write(chunk)
+                downloaded += len(chunk)
+                if total:
+                    progress = 8 + int(downloaded * 35 / total)
+                    job_manager.update(
+                        job_id,
+                        status="downloading",
+                        progress=max(8, min(progress, 45)),
+                        message=label,
+                    )
+    return target_path
+
+
+def _merge_video_audio(video_path: Path, audio_path: Path, output_path: Path, job_id: str) -> Path:
+    ffmpeg = get_ffmpeg_path()
+    job_manager.update(job_id, status="downloading", progress=85, message="Merging video and audio")
+    command = [
+        ffmpeg,
+        "-y",
+        "-i", str(video_path),
+        "-i", str(audio_path),
+        "-map", "0:v:0",
+        "-map", "1:a:0",
+        "-c", "copy",
+        "-movflags", "+faststart",
+        str(output_path),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=300)
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "ffmpeg merge failed").strip()[-1000:])
+    return output_path
+
+
+def _download_bilibili_playinfo(job_id: str, payload: Dict[str, Any]) -> Path:
+    video_url = payload.get("candidateUrl") or payload.get("candidate_url")
+    if not video_url:
+        raise ValueError("No Bilibili video track URL was provided")
+    audio_url = ""
+    candidate_id = payload.get("candidateId") or payload.get("candidate_id")
+    for candidate in _normalize_detected_streams(payload.get("detectedStreams") or [], payload.get("pageTitle") or ""):
+        if candidate["id"] == candidate_id or candidate["sourceUrl"] == video_url:
+            audio_url = candidate.get("companionAudioUrl") or ""
+            break
+    if not audio_url:
+        raise ValueError("No Bilibili audio track was found for the selected video quality")
+
+    headers = dict(DEFAULT_BROWSER_HEADERS)
+    headers.update({k: v for k, v in (payload.get("headers") or {}).items() if v and k.lower() not in {"cookie", "set-cookie"}})
+    if payload.get("cookies"):
+        headers["Cookie"] = payload.get("cookies")
+    if payload.get("pageUrl") or payload.get("page_url"):
+        headers["Referer"] = payload.get("pageUrl") or payload.get("page_url")
+
+    job_prefix = f"web_{job_id}"
+    video_path = UPLOAD_DIR / f"{job_prefix}.video.m4s"
+    audio_path = UPLOAD_DIR / f"{job_prefix}.audio.m4s"
+    output_path = UPLOAD_DIR / f"{job_prefix}.mp4"
+    try:
+        _download_direct_url(video_url, video_path, headers, job_id, "Downloading selected Bilibili video track")
+        job_manager.update(job_id, status="downloading", progress=50, message="Downloading Bilibili audio track")
+        _download_direct_url(audio_url, audio_path, headers, job_id, "Downloading Bilibili audio track")
+        return _merge_video_audio(video_path, audio_path, output_path, job_id)
+    finally:
+        for path in (video_path, audio_path):
+            try:
+                path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
 def _task_filename(payload: Dict[str, Any], downloaded_path: Path) -> str:
     title = payload.get("pageTitle") or downloaded_path.stem or "web-video"
     suffix = downloaded_path.suffix.lower() or ".mp4"
@@ -755,7 +844,10 @@ def _payload_note_style(payload: Dict[str, Any], default: str = "simple") -> str
 def _run_import_job(job_id: str, payload: Dict[str, Any]) -> None:
     downloaded_path: Optional[Path] = None
     try:
-        downloaded_path = _download_with_ytdlp(job_id, payload)
+        if (payload.get("formatId") or payload.get("format_id")) == "bilibili-playinfo":
+            downloaded_path = _download_bilibili_playinfo(job_id, payload)
+        else:
+            downloaded_path = _download_with_ytdlp(job_id, payload)
         job_manager.update(job_id, status="imported", progress=92, message="Creating AInote task")
 
         task_id = str(uuid.uuid4())

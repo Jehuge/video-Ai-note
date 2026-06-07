@@ -23,6 +23,12 @@ class DetectedStream(BaseModel):
     source: Optional[str] = None
     isFragment: Optional[bool] = False
     isBlob: Optional[bool] = False
+    companionAudioUrl: Optional[str] = None
+    companionAudioMimeType: Optional[str] = None
+    companionAudioCodecs: Optional[str] = None
+    bandwidth: Optional[int] = None
+    codecs: Optional[str] = None
+    isBilibiliPlayInfo: Optional[bool] = False
 
 
 class BrowserCookie(BaseModel):

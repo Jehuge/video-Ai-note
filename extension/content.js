@@ -27,7 +27,14 @@ function collectVideoStreams() {
       mimeType: extra.mimeType || "",
       height: extra.height,
       width: extra.width,
-      isFragment: extra.isFragment || isFragmentUrl(url),
+      filesize: extra.filesize,
+      companionAudioUrl: extra.companionAudioUrl || "",
+      companionAudioMimeType: extra.companionAudioMimeType || "",
+      companionAudioCodecs: extra.companionAudioCodecs || "",
+      bandwidth: extra.bandwidth,
+      codecs: extra.codecs || "",
+      isBilibiliPlayInfo: Boolean(extra.isBilibiliPlayInfo),
+      isFragment: extra.isFragment !== undefined ? extra.isFragment : isFragmentUrl(url),
       isBlob: url.startsWith("blob:")
     });
   }
@@ -75,6 +82,10 @@ function collectVideoStreams() {
     }
   }
 
+  for (const stream of collectBilibiliPlayInfoStreams()) {
+    add(stream.url, stream);
+  }
+
   for (const url of collectEmbeddedMediaUrls()) {
     add(url, {
       label: labelFromUrl(url),
@@ -105,7 +116,14 @@ function collectStreamsFromElement(element) {
       mimeType: extra.mimeType || "",
       height: extra.height,
       width: extra.width,
-      isFragment: extra.isFragment || isFragmentUrl(url),
+      filesize: extra.filesize,
+      companionAudioUrl: extra.companionAudioUrl || "",
+      companionAudioMimeType: extra.companionAudioMimeType || "",
+      companionAudioCodecs: extra.companionAudioCodecs || "",
+      bandwidth: extra.bandwidth,
+      codecs: extra.codecs || "",
+      isBilibiliPlayInfo: Boolean(extra.isBilibiliPlayInfo),
+      isFragment: extra.isFragment !== undefined ? extra.isFragment : isFragmentUrl(url),
       isBlob: url.startsWith("blob:")
     });
   }
@@ -294,6 +312,115 @@ function cleanEmbeddedUrl(rawUrl) {
     // Keep the original URL if it contains intentionally escaped query params.
   }
   return MEDIA_PATTERN.test(url) ? url : "";
+}
+
+function extractJsonAfterMarker(text, marker) {
+  const index = text.indexOf(marker);
+  if (index < 0) return null;
+  const start = text.indexOf("{", index + marker.length);
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < text.length; i += 1) {
+    const char = text[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (char === "\\") {
+      escape = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (char === "{") depth += 1;
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          return JSON.parse(text.slice(start, i + 1));
+        } catch (_) {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function findPageJson(marker) {
+  for (const script of document.scripts || []) {
+    const text = script.textContent || "";
+    if (!text.includes(marker)) continue;
+    const parsed = extractJsonAfterMarker(text, marker);
+    if (parsed) return parsed;
+  }
+  return null;
+}
+
+function mediaUrlFrom(item) {
+  if (!item || typeof item !== "object") return "";
+  const value = item.baseUrl || item.base_url || item.url;
+  if (!value) return "";
+  try {
+    return new URL(value, location.href).href;
+  } catch (_) {
+    return "";
+  }
+}
+
+function bilibiliFormatLabel(video) {
+  const height = Number.parseInt(video?.height || "", 10);
+  const codecs = video?.codecs ? ` ${video.codecs}` : "";
+  return height ? `${height}p B站页面轨道${codecs}` : `B站页面轨道${codecs}`;
+}
+
+function collectBilibiliPlayInfoStreams() {
+  if (!/\.bilibili\.com$/i.test(location.hostname)) return [];
+  const playInfo = findPageJson("window.__playinfo__");
+  const data = playInfo?.data || playInfo?.result || playInfo;
+  const dash = data?.dash;
+  if (!dash || !Array.isArray(dash.video)) return [];
+
+  const audios = [
+    ...(Array.isArray(dash.audio) ? dash.audio : []),
+    ...(Array.isArray(dash.dolby?.audio) ? dash.dolby.audio : []),
+    ...(dash.flac?.audio ? [dash.flac.audio] : [])
+  ].map((audio) => ({
+    url: mediaUrlFrom(audio),
+    bandwidth: Number(audio?.bandwidth || 0),
+    codecs: audio?.codecs || "",
+    mimeType: audio?.mimeType || audio?.mime_type || "audio/mp4"
+  })).filter((audio) => audio.url);
+
+  const bestAudio = audios.sort((a, b) => b.bandwidth - a.bandwidth)[0] || null;
+  const streams = [];
+  for (const video of dash.video || []) {
+    const url = mediaUrlFrom(video);
+    if (!url) continue;
+    const height = Number.parseInt(video.height || "", 10) || undefined;
+    streams.push({
+      url,
+      source: "bilibili-playinfo",
+      label: bilibiliFormatLabel(video),
+      mimeType: video.mimeType || video.mime_type || "video/mp4",
+      height,
+      width: Number.parseInt(video.width || "", 10) || undefined,
+      filesize: Number.parseInt(video.size || "", 10) || undefined,
+      companionAudioUrl: bestAudio?.url || "",
+      companionAudioMimeType: bestAudio?.mimeType || "",
+      companionAudioCodecs: bestAudio?.codecs || "",
+      bandwidth: Number(video.bandwidth || 0) || undefined,
+      codecs: video.codecs || "",
+      isFragment: false,
+      isBilibiliPlayInfo: true
+    });
+  }
+  return streams.sort((a, b) => (b.height || 0) - (a.height || 0)).slice(0, 12);
 }
 
 function collectEmbeddedMediaUrls() {
