@@ -65,7 +65,7 @@ class ImportRequest(ResolveRequest):
 async def extension_health(request: Request):
     return R.success({
         "app": "VideoNoteAI",
-        "version": "1.1.0",
+        "version": "1.1.1",
         "status": "ok",
         "host": request.client.host if request.client else None,
         "bridgeToken": get_bridge_token(),

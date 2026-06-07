@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "AInote Video Bridge",
   "description": "Detect videos on the current page and send them to the local Video Note AI app.",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "action": {
     "default_popup": "popup.html",
     "default_title": "AInote Video Bridge"

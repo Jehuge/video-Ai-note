@@ -143,8 +143,8 @@ app = BUNDLE(
     info_plist={
         'CFBundleName': 'VideoNoteAI',
         'CFBundleDisplayName': 'Video Note AI',
-        'CFBundleShortVersionString': '1.1.0',
-        'CFBundleVersion': '1.1.0',
+        'CFBundleShortVersionString': '1.1.1',
+        'CFBundleVersion': '1.1.1',
         'LSMinimumSystemVersion': '12.0',
         'NSHighResolutionCapable': True,
     },
