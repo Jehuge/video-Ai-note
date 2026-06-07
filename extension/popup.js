@@ -11,6 +11,7 @@ const state = {
   detectedStreams: [],
   selectedVideo: null,
   candidates: [],
+  resolveErrors: [],
   videoCount: 0,
   jobTimer: null
 };
@@ -126,6 +127,21 @@ function updateCookieInfo(cookieHeader = "") {
   }
   els.cookieInfo.textContent = message;
   els.cookieInfo.style.color = ok ? "#15803d" : "#b45309";
+}
+
+function compactResolveError(error) {
+  const text = String(error || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  return text
+    .replace(/^page:\s*/i, "")
+    .replace(/^stream\s+\S+:\s*/i, "")
+    .slice(0, 120);
+}
+
+function resolveErrorSummary() {
+  const errors = (state.resolveErrors || []).map(compactResolveError).filter(Boolean);
+  if (!errors.length) return "";
+  return errors.slice(0, 2).join("；");
 }
 
 async function collectSiteCookies() {
@@ -302,6 +318,7 @@ async function resolveVideos() {
   });
   if (!response.ok) throw new Error(`Resolve failed: HTTP ${response.status}`);
   const json = await response.json();
+  state.resolveErrors = json.data?.errors || [];
   state.candidates = (json.data?.candidates || []).filter((candidate) => !isFragmentUrl(candidate.sourceUrl || ""));
 }
 
@@ -440,11 +457,16 @@ async function refresh() {
     await resolveVideos();
     state.candidates = mergeCandidates(state.candidates, fallback);
     renderCandidates();
-    setStatus(state.candidates.length ? "视频已就绪" : "未找到支持的视频", state.candidates.length > 0);
+    const errorSummary = resolveErrorSummary();
+    if (state.candidates.length) {
+      setStatus(errorSummary ? `视频已就绪；解析提示：${errorSummary}` : "视频已就绪", true);
+    } else {
+      setStatus(errorSummary ? `未找到支持的视频：${errorSummary}` : "未找到支持的视频", false);
+    }
   } catch (error) {
     if (fallback) {
       state.candidates = [fallback];
-      setStatus("先用当前选择，AInote 会继续解析");
+      setStatus(`先用当前选择，AInote 会继续解析：${error.message}`);
     } else {
       setStatus(error.message);
       state.candidates = [];

@@ -137,12 +137,15 @@ function runPopupTest({
         if (!appReady) return { ok: false, status: 503, json: async () => ({}) };
         return { ok: true, status: 200, json: async () => ({ data: { bridgeToken: "token-1" } }) };
       }
-      if (url.endsWith("/extension/videos/resolve")) {
+  if (url.endsWith("/extension/videos/resolve")) {
         if (resolveResponse instanceof Error) throw resolveResponse;
+        const data = Array.isArray(resolveResponse)
+          ? { candidates: resolveResponse }
+          : { candidates: resolveResponse?.candidates || [], errors: resolveResponse?.errors || [] };
         return {
           ok: true,
           status: 200,
-          json: async () => ({ data: { candidates: resolveResponse || [] } })
+          json: async () => ({ data })
         };
       }
       if (url.endsWith("/extension/videos/import")) {
@@ -203,7 +206,8 @@ async function testPageFallbackWhenResolveIsSlow() {
   assert(env.elements.send.disabled === false, "send button should stay enabled with page fallback");
   assert(env.elements.candidate.children[0].value === "page-url", "page fallback candidate should render");
   assert(env.elements.format.children[0].value === "bv*+ba/best", "page fallback format should render");
-  assert(env.elements.status.textContent === "先用当前选择，AInote 会继续解析", "resolve failure should keep fallback status");
+  assert(env.elements.status.textContent.includes("先用当前选择，AInote 会继续解析"), "resolve failure should keep fallback status");
+  assert(env.elements.status.textContent.includes("timeout"), "resolve failure should show the error reason");
 }
 
 async function testAppOfflineDisablesSend() {
@@ -221,6 +225,26 @@ async function testAppOfflineDisablesSend() {
 
   assert(env.elements.send.disabled === true, "send button should be disabled when app is offline");
   assert(env.elements.status.textContent === "请先打开 AInote", "offline status should be shown");
+}
+
+async function testResolveErrorsAreShownWithFallback() {
+  const env = runPopupTest({
+    pageScan: {
+      pageUrl: "https://www.douyin.com/video/6961737553342991651",
+      pageTitle: "Douyin demo",
+      videoCount: 1,
+      streams: []
+    },
+    resolveResponse: {
+      candidates: [],
+      errors: ["page: [Douyin] Fresh cookies (not necessarily logged in) are needed"]
+    }
+  });
+
+  await env.context.__initialRefresh;
+
+  assert(env.elements.send.disabled === false, "fallback should remain sendable when resolve returns errors");
+  assert(env.elements.status.textContent.includes("Fresh cookies"), "resolve errors should be visible in popup status");
 }
 
 async function testCookiesAreOptIn() {
@@ -467,6 +491,7 @@ async function testCanceledJobStopsPolling() {
 (async () => {
   await testPageFallbackWhenResolveIsSlow();
   await testAppOfflineDisablesSend();
+  await testResolveErrorsAreShownWithFallback();
   await testCookiesAreOptIn();
   await testCookiesCanBeDisabled();
   await testBilibiliMissingSessdataWarnsAboutLowQuality();
