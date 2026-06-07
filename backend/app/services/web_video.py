@@ -312,9 +312,13 @@ def _write_cookie_file(cookie: str) -> Optional[str]:
     domains = [
         ".bilibili.com",
         ".douyin.com",
+        ".v.douyin.com",
         ".iesdouyin.com",
         ".snssdk.com",
     ]
+    # Keep browser cookies valid for yt-dlp's cookie jar. A timestamp of 0 is
+    # session-cookie syntax in yt-dlp, but a future expiry is safer for other parsers.
+    expires_at = "1893456000"  # 2030-01-01
     for item in cookie.split(";"):
         if "=" not in item:
             continue
@@ -322,7 +326,7 @@ def _write_cookie_file(cookie: str) -> Optional[str]:
         if not name:
             continue
         for domain in domains:
-            lines.append(f"{domain}\tTRUE\t/\tFALSE\t0\t{name}\t{value}")
+            lines.append(f"{domain}\tTRUE\t/\tFALSE\t{expires_at}\t{name}\t{value}")
 
     if len(lines) == 1:
         return None

@@ -122,6 +122,9 @@ function runPopupTest({
               { name: "bili_jct", value: "csrf" }
             ];
           }
+          if (details.url === "https://v.douyin.com/") {
+            return [{ name: "s_v_web_id", value: "fresh" }];
+          }
           return [{ name: `cookie${cookieCallIndex}`, value: "demo" }];
         }
       }
@@ -263,6 +266,26 @@ async function testCookiesCanBeDisabled() {
   assert(env.cookieCalls.length === 0, "cookies should not be read when unchecked");
   const resolveCall = env.fetchCalls.find((call) => call.url.endsWith("/extension/videos/resolve"));
   assert(JSON.parse(resolveCall.options.body).cookies === "", "resolve should not send cookies when disabled");
+}
+
+async function testDouyinCookiesReadFreshCookieDomains() {
+  const env = runPopupTest({
+    pageScan: {
+      pageUrl: "https://www.douyin.com/video/6961737553342991651",
+      pageTitle: "Douyin demo",
+      videoCount: 1,
+      streams: []
+    },
+    resolveResponse: []
+  });
+
+  await env.context.__initialRefresh;
+
+  assert(env.cookieCalls.some((call) => call.url === "https://www.douyin.com/"), "douyin web cookies should be read");
+  assert(env.cookieCalls.some((call) => call.url === "https://v.douyin.com/"), "douyin short-link cookies should be read");
+  const resolveCall = env.fetchCalls.find((call) => call.url.endsWith("/extension/videos/resolve"));
+  const body = JSON.parse(resolveCall.options.body);
+  assert(body.cookies.includes("s_v_web_id=fresh"), "resolve should include fresh Douyin visitor cookies");
 }
 
 async function testImportSendsCandidateUrl() {
@@ -424,6 +447,7 @@ async function testCanceledJobStopsPolling() {
   await testAppOfflineDisablesSend();
   await testCookiesAreOptIn();
   await testCookiesCanBeDisabled();
+  await testDouyinCookiesReadFreshCookieDomains();
   await testImportSendsCandidateUrl();
   await testImportSendsSelectedNoteStyle();
   await testFragmentsAreFilteredBeforeResolve();

@@ -1,4 +1,4 @@
-const MEDIA_PATTERN = /(\.(m3u8|mpd|mp4|webm|m4v|mov|mkv|flv|m4s|ts|aac|m4a)(\?|#|$)|\/aweme\/v\d+\/play\/|\/aweme\/v1\/play\/|\/video\/tos\/)/i;
+const MEDIA_PATTERN = /(\.(m3u8|mpd|mp4|webm|m4v|mov|mkv|flv|m4s|ts|aac|m4a)(\?|#|$)|\/aweme\/v\d+\/play\/|\/aweme\/v1\/play\/|\/video\/tos\/|\/tos-[^/?#]+\/|douyinvod\.com|douyinpic\.com)/i;
 const EMBEDDED_URL_PATTERN = /https?:\\?\/\\?\/[^"'<>\s]+/gi;
 let pickerActive = false;
 let pickerHighlight = null;
@@ -298,7 +298,7 @@ function collectEmbeddedMediaUrls() {
   const seen = new Set();
   for (const script of document.scripts || []) {
     const text = script.textContent || "";
-    if (!/(douyin|aweme|play_addr|video_id|m3u8|mp4|video\/tos)/i.test(text)) continue;
+    if (!/(douyin|douyinvod|aweme|play_addr|video_id|m3u8|mp4|video\/tos|tos-)/i.test(text)) continue;
     for (const match of text.matchAll(EMBEDDED_URL_PATTERN)) {
       const url = cleanEmbeddedUrl(match[0]);
       if (!url || seen.has(url)) continue;

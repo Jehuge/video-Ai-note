@@ -72,7 +72,7 @@ const context = {
     body,
     scripts: [
       {
-        textContent: 'window.__DATA__={"play_addr":{"url_list":["https:\\/\\/www.douyin.com\\/aweme\\/v1\\/play\\/?video_id=abc"]}}'
+        textContent: 'window.__DATA__={"play_addr":{"url_list":["https:\\/\\/www.douyin.com\\/aweme\\/v1\\/play\\/?video_id=abc","https:\\/\\/v3-dy-o.douyinvod.com\\/tos-cn-ve-15\\/abc\\/video"]}}'
       }
     ],
     createElement: (tag) => createElement(tag),
@@ -132,6 +132,10 @@ assert(scanResponse.headers.Referer === "https://site.example.test/watch", "scan
 assert(
   scanResponse.streams.some((stream) => stream.url.includes("/aweme/v1/play/?video_id=abc")),
   "scan should collect embedded Douyin play URLs"
+);
+assert(
+  scanResponse.streams.some((stream) => stream.url.includes("douyinvod.com/tos-cn-ve-15/abc/video")),
+  "scan should collect embedded Douyin CDN URLs"
 );
 
 console.log("extension content picker tests passed");

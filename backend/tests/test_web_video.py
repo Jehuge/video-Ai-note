@@ -210,8 +210,9 @@ class WebVideoServiceTests(unittest.TestCase):
             content = path.read_text(encoding="utf-8")
 
             self.assertTrue(path.exists())
-            self.assertIn(".bilibili.com\tTRUE\t/\tFALSE\t0\tSESSDATA\tdemo", content)
-            self.assertIn(".douyin.com\tTRUE\t/\tFALSE\t0\tmsToken\tabc", content)
+            self.assertIn(".bilibili.com\tTRUE\t/\tFALSE\t1893456000\tSESSDATA\tdemo", content)
+            self.assertIn(".douyin.com\tTRUE\t/\tFALSE\t1893456000\tmsToken\tabc", content)
+            self.assertIn(".v.douyin.com\tTRUE\t/\tFALSE\t1893456000\tmsToken\tabc", content)
 
         self.assertFalse(path.exists())
 

@@ -81,10 +81,10 @@ function cookieProbeUrls(pageUrl) {
       urls.push("https://www.bilibili.com/", "https://api.bilibili.com/");
     }
     if (host.endsWith("douyin.com")) {
-      urls.push("https://www.douyin.com/");
+      urls.push("https://www.douyin.com/", "https://v.douyin.com/");
     }
     if (host.endsWith("iesdouyin.com")) {
-      urls.push("https://www.iesdouyin.com/");
+      urls.push("https://www.iesdouyin.com/", "https://www.douyin.com/");
     }
   } catch (_) {
     return urls;

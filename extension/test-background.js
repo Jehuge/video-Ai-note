@@ -57,13 +57,21 @@ webRequestCallback({
   responseHeaders: [{ name: "content-type", value: "text/css" }]
 });
 
+webRequestCallback({
+  tabId: 7,
+  url: "https://v3-dy-o.douyinvod.com/tos-cn-ve-15/oAbCdEf/video",
+  type: "media",
+  responseHeaders: [{ name: "content-type", value: "application/octet-stream" }]
+});
+
 let response = null;
 messageCallback({ type: "GET_DETECTED_STREAMS", tabId: 7 }, {}, (value) => {
   response = value;
 });
 
-assert(response.streams.length === 1, "only the Douyin play URL should be remembered");
-assert(response.streams[0].url.includes("/aweme/v1/play/"), "Douyin aweme play URL should be detected");
-assert(response.streams[0].label === "Media stream", "extensionless play URL should get a generic media label");
+assert(response.streams.length === 2, "Douyin play and CDN URLs should be remembered");
+assert(response.streams.some((stream) => stream.url.includes("/aweme/v1/play/")), "Douyin aweme play URL should be detected");
+assert(response.streams.some((stream) => stream.url.includes("douyinvod.com")), "Douyin CDN URL should be detected");
+assert(response.streams.every((stream) => stream.label === "Media stream"), "extensionless Douyin URLs should get a generic media label");
 
 console.log("extension background tests passed");
