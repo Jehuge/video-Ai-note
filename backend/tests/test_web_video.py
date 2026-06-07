@@ -612,6 +612,23 @@ class WebVideoServiceTests(unittest.TestCase):
 
         self.assertEqual(options["impersonate"], "chrome")
 
+    def test_ytdlp_options_set_stable_youtube_clients(self):
+        options = web_video._yt_dlp_options()
+
+        self.assertEqual(
+            options["extractor_args"]["youtube"]["player_client"],
+            ["android_vr", "web"],
+        )
+
+    def test_ytdlp_options_allow_youtube_client_override(self):
+        with mock.patch.dict("os.environ", {"YTDLP_YOUTUBE_PLAYER_CLIENTS": "android,ios"}, clear=False):
+            options = web_video._yt_dlp_options()
+
+        self.assertEqual(
+            options["extractor_args"]["youtube"]["player_client"],
+            ["android", "ios"],
+        )
+
     def test_temporary_cookiefile_writes_browser_cookie_for_supported_sites(self):
         with web_video._temporary_cookiefile("SESSDATA=demo; msToken=abc") as cookie_file:
             path = Path(cookie_file)
@@ -777,6 +794,52 @@ class WebVideoServiceTests(unittest.TestCase):
 
         self.assertTrue(result["diagnostics"]["ytDlpCookies"]["bilibiliSessdata"])
 
+    def test_youtube_resolve_retries_without_bad_browser_cookies_when_no_formats(self):
+        calls = []
+
+        class FakeYoutubeDL:
+            def __init__(self, options):
+                self.options = options
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def extract_info(self, url, **_kwargs):
+                calls.append((url, self.options.get("cookiefile"), self.options["http_headers"].get("Cookie")))
+                if self.options["http_headers"].get("Cookie"):
+                    raise RuntimeError("[youtube] demo: No video formats found!")
+                return {
+                    "title": "YouTube demo",
+                    "webpage_url": url,
+                    "extractor": "youtube",
+                    "formats": [{"format_id": "401", "height": 2160, "ext": "mp4", "vcodec": "av01", "acodec": "none"}],
+                }
+
+        with mock.patch.dict(sys.modules, {"yt_dlp": types.SimpleNamespace(YoutubeDL=FakeYoutubeDL)}):
+            result = web_video.resolve_web_video(
+                page_url="https://www.youtube.com/watch?v=demo",
+                cookie="SID=bad",
+                cookie_details=[{
+                    "name": "SID",
+                    "value": "bad",
+                    "domain": ".youtube.com",
+                    "path": "/",
+                    "secure": True,
+                    "expirationDate": 1924992000,
+                }],
+            )
+
+        self.assertEqual(len(calls), 2)
+        self.assertIsNotNone(calls[0][1])
+        self.assertEqual(calls[0][2], "SID=bad")
+        self.assertIsNone(calls[1][1])
+        self.assertIsNone(calls[1][2])
+        self.assertEqual(result["candidates"][0]["formats"][0]["formatId"], "401+ba/best")
+        self.assertIn("retrying", " ".join(result["diagnostics"]["ytDlpMessages"]).lower())
+
     def test_download_passes_cookiefile_to_ytdlp_and_removes_it(self):
         with TemporaryDirectory() as tmp:
             upload_dir = Path(tmp)
@@ -822,6 +885,55 @@ class WebVideoServiceTests(unittest.TestCase):
             self.assertTrue(seen["cookiefile_exists"])
             self.assertIn(".bilibili.com\tTRUE\t/\tTRUE\t1924992000\tSESSDATA\tdemo", seen["cookiefile_content"])
             self.assertFalse(Path(seen["cookiefile"]).exists())
+
+    def test_youtube_download_retries_without_bad_browser_cookies_when_no_formats(self):
+        with TemporaryDirectory() as tmp:
+            upload_dir = Path(tmp)
+            calls = []
+
+            class FakeYoutubeDL:
+                def __init__(self, options):
+                    self.options = options
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *_args):
+                    return False
+
+                def download(self, urls):
+                    calls.append({
+                        "urls": urls,
+                        "cookie": self.options["http_headers"].get("Cookie"),
+                        "cookiefile": self.options.get("cookiefile"),
+                    })
+                    if self.options["http_headers"].get("Cookie"):
+                        raise RuntimeError("[youtube] demo: No video formats found!")
+                    (upload_dir / "web_job-yt.mp4").write_bytes(b"video")
+
+            with mock.patch.object(web_video, "UPLOAD_DIR", upload_dir), \
+                    mock.patch.dict(sys.modules, {"yt_dlp": types.SimpleNamespace(YoutubeDL=FakeYoutubeDL)}):
+                path = web_video._download_with_ytdlp("job-yt", {
+                    "pageUrl": "https://www.youtube.com/watch?v=demo",
+                    "candidateUrl": "https://www.youtube.com/watch?v=demo",
+                    "formatId": "bv*+ba/best",
+                    "cookies": "SID=bad",
+                    "cookieDetails": [{
+                        "name": "SID",
+                        "value": "bad",
+                        "domain": ".youtube.com",
+                        "path": "/",
+                        "secure": True,
+                        "expirationDate": 1924992000,
+                    }],
+                })
+
+            self.assertEqual(path.name, "web_job-yt.mp4")
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(calls[0]["cookie"], "SID=bad")
+            self.assertIsNotNone(calls[0]["cookiefile"])
+            self.assertIsNone(calls[1]["cookie"])
+            self.assertIsNone(calls[1]["cookiefile"])
 
     def test_run_import_job_downloads_douyin_page_data_directly(self):
         with TemporaryDirectory() as tmp:
