@@ -58,7 +58,7 @@ function runPopupTest({
   jobResponse = { status: "completed", progress: 100 }
 }) {
   const elements = {};
-  for (const id of ["status", "pick", "refresh", "candidate", "format", "noteStyle", "screenshot", "cookies", "cookieInfo", "diagnostics", "autoRun", "send", "empty", "progress", "bar", "progressText"]) {
+  for (const id of ["status", "pick", "refresh", "candidate", "format", "noteStyle", "screenshot", "cookies", "cookieInfo", "diagnostics", "autoRun", "send", "copyDiagnostics", "empty", "progress", "bar", "progressText"]) {
     elements[id] = createElement(id);
   }
   elements.cookies.checked = cookiesChecked !== false;
@@ -73,6 +73,7 @@ function runPopupTest({
 
   const fetchCalls = [];
   const cookieCalls = [];
+  const clipboardWrites = [];
   const timers = [];
   let intervalCallback = null;
   let clearIntervalCalls = 0;
@@ -101,6 +102,11 @@ function runPopupTest({
       },
       createElement(tag) {
         return createElement(tag);
+      }
+    },
+    navigator: {
+      clipboard: {
+        writeText: async (text) => clipboardWrites.push(text)
       }
     },
     chrome: {
@@ -186,6 +192,7 @@ function runPopupTest({
     elements,
     fetchCalls,
     cookieCalls,
+    clipboardWrites,
     get clearIntervalCalls() {
       return clearIntervalCalls;
     },
@@ -303,6 +310,55 @@ async function testResolveDiagnosticsAreShown() {
   assert(env.elements.diagnostics.textContent.includes("B站 API 1080p"), "diagnostics should show bilibili API max height");
   assert(env.elements.diagnostics.textContent.includes("premium member"), "diagnostics should show yt-dlp quality warnings");
   assert(env.elements.diagnostics.textContent.includes("BiliBili"), "diagnostics should show extractor name");
+}
+
+async function testCopyDiagnosticsIncludesResolveDetails() {
+  const env = runPopupTest({
+    pageScan: {
+      pageUrl: "https://www.bilibili.com/video/BV1demo/",
+      pageTitle: "Bilibili demo",
+      videoCount: 1,
+      streams: [{ url: "https://upos.example.test/video-1080.m4s", source: "bilibili-playinfo", height: 1080, isBilibiliPlayInfo: true }]
+    },
+    resolveResponse: {
+      candidates: [{
+        id: "bilibili-api-BV1demo",
+        title: "Bilibili demo",
+        sourceUrl: "https://www.bilibili.com/video/BV1demo/",
+        extractor: "bilibili-api",
+        formats: [{
+          formatId: "bilibili-api-80",
+          label: "1080P 高清",
+          height: 1080,
+          protocol: "bilibili-dash",
+          sourceUrl: "https://upos.example.test/video-1080.m4s",
+          companionAudioUrl: "https://upos.example.test/audio.m4s"
+        }]
+      }],
+      diagnostics: {
+        candidateCount: 1,
+        formatCount: 1,
+        maxHeight: 1080,
+        receivedCookies: { bilibiliSessdata: true },
+        bilibiliApi: { bilibiliApiLogin: true, bilibiliApiFormatHeights: [1080] },
+        ytDlpMessages: ["yt-dlp message"]
+      }
+    }
+  });
+
+  await env.context.__initialRefresh;
+  assert(env.elements.copyDiagnostics.classList.contains("hidden") === false, "copy diagnostics should be visible when diagnostics exist");
+  await env.context.copyDiagnostics();
+  await flush();
+
+  assert(env.clipboardWrites.length === 1, "copy diagnostics should write to clipboard");
+  const payload = JSON.parse(env.clipboardWrites[0]);
+  assert(payload.pageUrl === "https://www.bilibili.com/video/BV1demo/", "diagnostics should include page url");
+  assert(payload.hostKind === "bilibili", "diagnostics should include host kind");
+  assert(payload.cookieNames.includes("SESSDATA"), "diagnostics should include cookie names");
+  assert(payload.candidates[0].formats[0].formatId === "bilibili-api-80", "diagnostics should include resolved formats");
+  assert(payload.candidates[0].formats[0].hasCompanionAudio === true, "diagnostics should include audio presence");
+  assert(payload.diagnostics.bilibiliApi.bilibiliApiFormatHeights[0] === 1080, "diagnostics should include bilibili API heights");
 }
 
 async function testCookiesAreOptIn() {
@@ -602,6 +658,7 @@ async function testCanceledJobStopsPolling() {
   await testAppOfflineDisablesSend();
   await testResolveErrorsAreShownWithFallback();
   await testResolveDiagnosticsAreShown();
+  await testCopyDiagnosticsIncludesResolveDetails();
   await testCookiesAreOptIn();
   await testCookiesCanBeDisabled();
   await testBilibiliMissingSessdataWarnsAboutLowQuality();

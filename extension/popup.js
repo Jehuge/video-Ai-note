@@ -32,6 +32,7 @@ const els = {
   diagnostics: document.getElementById("diagnostics"),
   autoRun: document.getElementById("autoRun"),
   send: document.getElementById("send"),
+  copyDiagnostics: document.getElementById("copyDiagnostics"),
   empty: document.getElementById("empty"),
   progress: document.getElementById("progress"),
   bar: document.getElementById("bar"),
@@ -211,6 +212,73 @@ function updateDiagnostics(diagnostics = state.diagnostics) {
   const text = formatDiagnostics(diagnostics);
   els.diagnostics.textContent = text;
   els.diagnostics.classList.toggle("hidden", !text);
+  els.copyDiagnostics?.classList.toggle("hidden", !hasDiagnosticsPayload());
+}
+
+function hasDiagnosticsPayload() {
+  return Boolean(
+    state.diagnostics
+    || state.resolveErrors.length
+    || state.candidates.length
+    || state.detectedStreams.length
+    || state.cookieDetails.length
+  );
+}
+
+function buildDiagnosticsPayload() {
+  const selected = selectedCandidate();
+  return {
+    app: "AInote Video Bridge",
+    createdAt: new Date().toISOString(),
+    pageUrl: state.pageUrl,
+    pageTitle: state.pageTitle,
+    hostKind: hostKind(),
+    videoCount: state.videoCount,
+    selectedCandidateId: selected?.id || "",
+    selectedFormatId: els.format?.value || "",
+    cookiesEnabled: els.cookies ? els.cookies.checked !== false : true,
+    cookieNames: state.cookieDetails.map((item) => item.name).filter(Boolean),
+    detectedStreams: state.detectedStreams.map((stream) => ({
+      url: stream.url,
+      label: stream.label,
+      source: stream.source,
+      height: stream.height,
+      mimeType: stream.mimeType,
+      isDouyinPageData: Boolean(stream.isDouyinPageData),
+      isBilibiliPlayInfo: Boolean(stream.isBilibiliPlayInfo),
+    })),
+    candidates: state.candidates.map((candidate) => ({
+      id: candidate.id,
+      title: candidate.title,
+      sourceUrl: candidate.sourceUrl,
+      extractor: candidate.extractor,
+      formats: (candidate.formats || []).map((format) => ({
+        formatId: format.formatId,
+        label: format.label,
+        height: format.height,
+        protocol: format.protocol,
+        sourceUrl: format.sourceUrl,
+        hasCompanionAudio: Boolean(format.companionAudioUrl),
+      })),
+    })),
+    diagnostics: state.diagnostics,
+    resolveErrors: state.resolveErrors,
+  };
+}
+
+async function copyDiagnostics() {
+  const text = JSON.stringify(buildDiagnosticsPayload(), null, 2);
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+  } else {
+    const area = document.createElement("textarea");
+    area.value = text;
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand("copy");
+    area.remove();
+  }
+  setStatus("诊断信息已复制", true);
 }
 
 function compactResolveError(error) {
@@ -616,6 +684,9 @@ els.send.addEventListener("click", () => {
     els.progress.classList.remove("hidden");
     els.send.disabled = state.candidates.length === 0;
   });
+});
+els.copyDiagnostics?.addEventListener("click", () => {
+  copyDiagnostics().catch((error) => setStatus(`复制诊断失败：${error.message}`));
 });
 
 refresh();
