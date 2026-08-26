@@ -204,6 +204,13 @@ def main():
     # 虽然 pywebview 会一直加载，但最好确保端口可达
     # 不过为了响应速度，我们可以直接打开窗口
     
+    # 允许前端通过 Blob + <a download> 导出文件。
+    # pywebview 默认关闭下载，会导致桌面版只显示成功提示但没有文件落盘。
+    try:
+        webview.settings["ALLOW_DOWNLOADS"] = True
+    except Exception as settings_error:
+        print(f"Failed to enable WebView downloads: {settings_error}")
+
     # 创建 PyWebView 窗口
     window = webview.create_window(
         title='Video Note AI', 

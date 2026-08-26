@@ -75,14 +75,13 @@ export const confirmStep = async (taskId: string, step: string, noteStyle?: stri
   })
 }
 
-// 重新生成笔记
-export const regenerateNote = async (taskId: string, noteStyle?: string) => {
-  const modelConfig = getSelectedModelConfig(noteStyle || 'simple')
-
-  // 将模型配置作为请求体传递（使用驼峰命名）
-  return await api.post(`/task/${taskId}/regenerate`, {
-    modelConfig: modelConfig,
-    noteStyle: noteStyle
+// 重跑指定阶段：失败任务续跑，已完成任务由后端自动创建分支
+export const retryTaskStep = async (taskId: string, step: string, noteStyle?: string) => {
+  const modelConfig = step === 'summarize' ? getSelectedModelConfig(noteStyle || 'simple') : null
+  return await api.post(`/task/${taskId}/retry`, {
+    step,
+    modelConfig,
+    noteStyle,
   })
 }
 

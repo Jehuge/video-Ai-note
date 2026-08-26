@@ -1,4 +1,42 @@
 import os
+
+
+_DLL_DIRECTORY_HANDLES = []
+
+
+def _register_nvidia_dlls() -> None:
+    """将 pip 安装的 CUDA 运行库目录加入 PATH。
+
+    faster-whisper 的 GPU 推理依赖 cuBLAS/cuDNN DLL。通过
+    ``pip install nvidia-cublas-cu12 nvidia-cudnn-cu12`` 安装后，
+    这些 DLL 位于 site-packages/nvidia/*/bin，需要加入 PATH 才能被加载。
+    """
+    try:
+        import nvidia
+    except ImportError:
+        return
+    base = nvidia.__path__[0]
+    dirs = [
+        os.path.join(base, pkg, "bin")
+        for pkg in ("cublas", "cudnn")
+        if os.path.isdir(os.path.join(base, pkg, "bin"))
+    ]
+    if not dirs:
+        return
+
+    existing_path = os.environ.get("PATH")
+    os.environ["PATH"] = os.pathsep.join(dirs + ([existing_path] if existing_path else []))
+
+    if os.name == "nt" and hasattr(os, "add_dll_directory"):
+        for directory in dirs:
+            try:
+                _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(directory))
+            except OSError:
+                pass
+
+
+_register_nvidia_dlls()
+
 from faster_whisper import WhisperModel
 from app.transcriber.base import Transcriber
 from app.models.transcriber_model import TranscriptResult, TranscriptSegment

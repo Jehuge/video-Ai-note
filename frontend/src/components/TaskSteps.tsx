@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { FileVideo, Music, FileText, BookOpen, RotateCcw, Eye, Play } from 'lucide-react'
 import { useTaskStore } from '../store/taskStore'
-import { getTaskStatus, confirmStep, regenerateNote } from '../services/api'
+import { getTaskStatus, confirmStep, retryTaskStep } from '../services/api'
 import StepProgress, { StepStatus } from './StepProgress'
 import ContentPreviewModal from './ContentPreviewModal'
 import MarkdownContent from './MarkdownContent'
@@ -12,10 +12,9 @@ interface TaskStepsProps {
 }
 
 export default function TaskSteps({ taskId }: TaskStepsProps) {
-  const { tasks, updateTask } = useTaskStore()
+  const { tasks, updateTask, addTask } = useTaskStore()
   const task = tasks.find((t) => t.id === taskId)
   const [steps, setSteps] = useState<any[]>([])
-  const [autoProcess, setAutoProcess] = useState(false)
   const [transcript, setTranscript] = useState<any>(null)
   const [previewContent, setPreviewContent] = useState<{
     type: 'transcript' | 'markdown' | 'video'
@@ -37,6 +36,10 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
 
     const transcriptSegmentCount = transcript?.segments?.length || 0
     const isTranscribeCompleted = task.status === 'transcribed' || transcriptSegmentCount > 0
+    const failedStep = task.failedStep
+    const isExtractCompleted =
+      ['processing', 'transcribing', 'transcribed', 'summarizing', 'completed'].includes(task.status) ||
+      (task.status === 'failed' && ['transcribe', 'summarize'].includes(failedStep || ''))
 
     const initialSteps = [
       {
@@ -72,32 +75,47 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
         id: 'extract',
         name: '提取音频',
         description: '从视频文件中提取音频（如果是视频）',
-        status: (task.status === 'pending'
-          ? 'waiting_confirm'
-          : ['processing', 'transcribing', 'transcribed', 'summarizing', 'completed'].includes(task.status)
-            ? 'completed'
-            : 'pending') as StepStatus,
-        canConfirm: task.status === 'pending',
+        status: (task.status === 'failed'
+          ? failedStep === 'extract' ? 'failed' : 'completed'
+          : task.status === 'extracting'
+            ? 'processing'
+            : task.status === 'pending'
+              ? 'waiting_confirm'
+              : ['processing', 'transcribing', 'transcribed', 'summarizing', 'completed'].includes(task.status)
+                ? 'completed'
+                : 'pending') as StepStatus,
+        canConfirm: task.status === 'pending' || failedStep === 'extract',
         onConfirm: () => handleStepConfirm('extract'),
-        result: task.status !== 'pending' ? (
+        result: isExtractCompleted ? (
           <div className="flex items-center gap-2 text-sm text-green-600">
             <Music className="w-4 h-4" />
             <span>音频提取完成</span>
           </div>
         ) : null,
+        completedControl: ['processing', 'transcribed', 'completed'].includes(task.status) ? (
+          <button
+            onClick={(e) => { e.stopPropagation(); handleStageRetry('extract') }}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-white text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 hover:text-blue-600 hover:border-blue-200 transition-all shadow-sm"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            重新生成
+          </button>
+        ) : undefined,
       },
       {
         id: 'transcribe',
         name: '音频转写',
         description: '使用本地 faster-whisper 将音频转换为文字',
-        status: (isTranscribeCompleted
-          ? 'completed'
-          : task.status === 'transcribing'
-            ? 'processing'
-            : task.status === 'processing'
-              ? 'waiting_confirm'
-              : 'pending') as StepStatus,
-        canConfirm: task.status === 'processing',
+        status: (task.status === 'failed'
+          ? failedStep === 'transcribe' ? 'failed' : failedStep === 'summarize' ? 'completed' : 'pending'
+          : isTranscribeCompleted
+            ? 'completed'
+            : task.status === 'transcribing'
+              ? 'processing'
+              : task.status === 'processing'
+                ? 'waiting_confirm'
+                : 'pending') as StepStatus,
+        canConfirm: task.status === 'processing' || failedStep === 'transcribe',
         onConfirm: () => handleStepConfirm('transcribe'),
         result: isTranscribeCompleted ? (
           <div className="flex items-center justify-between text-sm text-green-600">
@@ -122,6 +140,15 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
             </button>
           </div>
         ) : null,
+        completedControl: ['transcribed', 'completed'].includes(task.status) ? (
+          <button
+            onClick={(e) => { e.stopPropagation(); handleStageRetry('transcribe') }}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-white text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 hover:text-blue-600 hover:border-blue-200 transition-all shadow-sm"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            重新生成
+          </button>
+        ) : undefined,
         onClick: isTranscribeCompleted ? () => {
           if (transcript) {
             setPreviewContent({
@@ -136,34 +163,17 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
         id: 'summarize',
         name: '生成笔记',
         description: '使用 GPT 生成结构化笔记',
-        status: (['summarizing', 'completed'].includes(task.status)
-          ? task.status === 'summarizing'
-            ? 'processing'
-            : 'completed'
-          : isTranscribeCompleted || task.status === 'transcribing' || task.status === 'transcribed'
-            ? 'waiting_confirm'
-            : 'pending') as StepStatus,
-        canConfirm: isTranscribeCompleted,
-        onConfirm: async () => {
-          try {
-            setSteps((prev) =>
-              prev.map((step) =>
-                step.id === 'summarize' ? { ...step, status: 'processing' as StepStatus } : step
-              )
-            )
-
-            await regenerateNote(taskId, noteStyle)
-            setAutoProcess(true)
-          } catch (error: any) {
-            console.error('开始生成笔记失败:', error)
-            toast.error(error.response?.data?.msg || '开始生成失败')
-            setSteps((prev) =>
-              prev.map((step) =>
-                step.id === 'summarize' ? { ...step, status: 'waiting_confirm' as StepStatus } : step
-              )
-            )
-          }
-        },
+        status: (task.status === 'failed'
+          ? failedStep === 'summarize' ? 'failed' : 'pending'
+          : ['summarizing', 'completed'].includes(task.status)
+            ? task.status === 'summarizing'
+              ? 'processing'
+              : 'completed'
+            : isTranscribeCompleted || task.status === 'transcribing' || task.status === 'transcribed'
+              ? 'waiting_confirm'
+              : 'pending') as StepStatus,
+        canConfirm: isTranscribeCompleted || failedStep === 'summarize',
+        onConfirm: () => handleStageRetry('summarize'),
         customControl: (
           <div className="mt-4 flex flex-col sm:flex-row gap-3">
             <div className="relative">
@@ -256,28 +266,9 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
             </div>
 
             <button
-              onClick={async (e) => {
+              onClick={(e) => {
                 e.stopPropagation()
-                try {
-                  setSteps((prev) =>
-                    prev.map((step) =>
-                      step.id === 'summarize' ? { ...step, status: 'processing' as StepStatus } : step
-                    )
-                  )
-
-                  await regenerateNote(taskId, noteStyle)
-                  toast.success('正在重新生成笔记...')
-                  setAutoProcess(true)
-                } catch (error: any) {
-                  toast.error(error.response?.data?.msg || '重新生成失败')
-                  if (task.status === 'completed') {
-                    setSteps((prev) =>
-                      prev.map((step) =>
-                        step.id === 'summarize' ? { ...step, status: 'completed' as StepStatus } : step
-                      )
-                    )
-                  }
-                }
+                void handleStageRetry('summarize')
               }}
               className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-white text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 hover:text-blue-600 hover:border-blue-200 hover:shadow-sm transition-all shadow-sm"
             >
@@ -323,11 +314,10 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
             partialMarkdown: taskData.partial_markdown || currentTask?.partialMarkdown || '',
             progressMessage: taskData.progress_message || '',
             errorMessage: taskData.error_message || '',
+            failedStep: taskData.failed_step,
           })
 
-          if (taskData.transcript) {
-            setTranscript(taskData.transcript)
-          }
+          setTranscript(taskData.transcript || null)
 
           updateStepsStatus(taskData.status, taskData)
         }
@@ -347,7 +337,7 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
     if (!taskId) return
 
     const task = tasks.find((t) => t.id === taskId)
-    if (!task || (['completed', 'transcribed'].includes(task.status) && !autoProcess) || task.status === 'failed') {
+    if (!task || ['completed', 'transcribed', 'failed'].includes(task.status)) {
       return
     }
 
@@ -364,17 +354,15 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
             partialMarkdown: taskData.partial_markdown || currentTask?.partialMarkdown || '',
             progressMessage: taskData.progress_message || '',
             errorMessage: taskData.error_message || '',
+            failedStep: taskData.failed_step,
           })
 
-          if (taskData.transcript) {
-            setTranscript(taskData.transcript)
-          }
+          setTranscript(taskData.transcript || null)
 
           updateStepsStatus(taskData.status, taskData)
 
           if (taskData.status === 'completed' || taskData.status === 'failed' || taskData.status === 'transcribed') {
             clearInterval(interval)
-            setAutoProcess(false)
           }
         }
       } catch (error) {
@@ -383,7 +371,7 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
     }, 2000)
 
     return () => clearInterval(interval)
-  }, [taskId, autoProcess, task?.status])
+  }, [taskId, task?.status])
 
   const updateStepsStatus = (status: string, taskData: any) => {
     setSteps((prev) =>
@@ -440,11 +428,11 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
           }
         }
 
-        if (status === 'processing' && step.id === 'extract') {
+        if (status === 'extracting' && step.id === 'extract') {
           return { ...step, status: 'processing' as StepStatus }
         }
 
-        if (status !== 'pending' && step.id === 'extract' && step.status === 'processing') {
+        if (!['pending', 'extracting'].includes(status) && step.id === 'extract' && step.status === 'processing') {
           return {
             ...step,
             status: 'completed' as StepStatus,
@@ -549,16 +537,73 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
     )
   }
 
+  if (!task) {
+    return (
+      <div className="h-full flex items-center justify-center text-gray-400">
+        <p>任务不存在</p>
+      </div>
+    )
+  }
+
+  const handleStageRetry = async (stepId: string): Promise<void> => {
+    const previousStatus = (steps.find((step) => step.id === stepId)?.status || 'waiting_confirm') as StepStatus
+    setSteps((prev) =>
+      prev.map((step) => step.id === stepId ? { ...step, status: 'processing' as StepStatus } : step)
+    )
+
+    try {
+      const response = await retryTaskStep(taskId, stepId, stepId === 'summarize' ? noteStyle : undefined)
+      if (response.data.code !== 200) {
+        throw new Error(response.data.msg || '重新生成失败')
+      }
+
+      const retryData = response.data.data
+      if (retryData.task_id && retryData.task_id !== taskId) {
+        setSteps((prev) =>
+          prev.map((step) => step.id === stepId ? { ...step, status: previousStatus } : step)
+        )
+        addTask({
+          id: retryData.task_id,
+          filename: task.filename,
+          status: retryData.status,
+          source: task.source,
+          sourceUrl: task.sourceUrl,
+        })
+        toast.success('已创建分支任务，正在重新生成')
+      } else {
+        updateTask(taskId, {
+          status: retryData.status,
+          errorMessage: '',
+          failedStep: undefined,
+        })
+      }
+    } catch (error: any) {
+      console.error('重跑阶段失败:', error)
+      toast.error(error.response?.data?.msg || error.message || '重新生成失败')
+      setSteps((prev) =>
+        prev.map((step) => step.id === stepId ? { ...step, status: previousStatus } : step)
+      )
+    }
+  }
+
   const handleStepConfirm = async (stepId: string) => {
     try {
+      if (task.status === 'failed' && task.failedStep === stepId) {
+        await handleStageRetry(stepId)
+        return
+      }
+
       setSteps((prev) =>
         prev.map((step) =>
           step.id === stepId ? { ...step, status: 'processing' as StepStatus } : step
         )
       )
 
-      await confirmStep(taskId, stepId, stepId === 'summarize' ? noteStyle : undefined)
-      setAutoProcess(true)
+      const response = await confirmStep(taskId, stepId, stepId === 'summarize' ? noteStyle : undefined)
+      if (response.data.code !== 200) {
+        throw new Error(response.data.msg || '开始处理失败')
+      }
+      updateTask(taskId, { status: response.data.data.status })
     } catch (error) {
       console.error('确认步骤失败:', error)
       setSteps((prev) =>
@@ -567,14 +612,6 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
         )
       )
     }
-  }
-
-  if (!task) {
-    return (
-      <div className="h-full flex items-center justify-center text-gray-400">
-        <p>任务不存在</p>
-      </div>
-    )
   }
 
   const currentStepIndex = steps.findIndex((s) => s.status === 'processing' || s.status === 'waiting_confirm')

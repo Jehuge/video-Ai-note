@@ -1105,6 +1105,44 @@ class WebVideoServiceTests(unittest.TestCase):
             self.assertEqual(generated["model_config"]["note_style"], "creative")
             self.assertIn('"note_style": "creative"', config_file.read_text(encoding="utf-8"))
 
+    def test_direct_download_retries_before_publishing_target(self):
+        class FakeResponse:
+            headers = {"content-length": "5"}
+
+            def __init__(self, content):
+                self.content = content
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def raise_for_status(self):
+                pass
+
+            def iter_content(self, chunk_size):
+                yield self.content
+
+        with TemporaryDirectory() as tmp:
+            target = Path(tmp) / "video.mp4"
+            job = web_video.job_manager.create("https://example.test/watch")
+            with mock.patch(
+                "requests.get",
+                side_effect=[FakeResponse(b"bad"), FakeResponse(b"video")],
+            ) as request_get, mock.patch.object(web_video.time, "sleep"):
+                result = web_video._download_direct_url(
+                    "https://cdn.example.test/video.mp4",
+                    target,
+                    {},
+                    job.job_id,
+                )
+
+            self.assertEqual(result, target)
+            self.assertEqual(target.read_bytes(), b"video")
+            self.assertFalse((Path(tmp) / "video.mp4.part").exists())
+            self.assertEqual(request_get.call_count, 2)
+
     def test_run_import_job_marks_failed_on_download_error(self):
         with mock.patch.object(web_video, "_download_with_ytdlp", side_effect=RuntimeError("boom")):
             job = web_video.job_manager.create("https://example.test/watch")
@@ -1113,6 +1151,48 @@ class WebVideoServiceTests(unittest.TestCase):
         updated = web_video.job_manager.get(job.job_id)
         self.assertEqual(updated.status, "failed")
         self.assertEqual(updated.error, "boom")
+
+    def test_run_import_job_preserves_note_generator_failed_step(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            upload_dir = tmp_path / "uploads"
+            output_dir = tmp_path / "notes"
+            upload_dir.mkdir()
+            output_dir.mkdir()
+            downloaded = tmp_path / "download.mp4"
+            downloaded.write_bytes(b"video")
+
+            task = mock.Mock(status="failed", failed_step="summarize")
+
+            class FakeNoteGenerator:
+                def __init__(self, *_args, **_kwargs):
+                    pass
+
+                def generate(self, **_kwargs):
+                    raise RuntimeError("summary failed")
+
+            with mock.patch.object(web_video, "UPLOAD_DIR", upload_dir), \
+                    mock.patch.object(web_video, "NOTE_OUTPUT_DIR", output_dir), \
+                    mock.patch.object(web_video, "_download_with_ytdlp", return_value=downloaded), \
+                    mock.patch.object(web_video, "load_active_model_config", return_value={"model": "demo"}), \
+                    mock.patch.object(web_video, "create_task"), \
+                    mock.patch.object(web_video, "get_task_by_id", return_value=task), \
+                    mock.patch.object(web_video, "update_task_status") as update_status, \
+                    mock.patch.object(web_video, "NoteGenerator", FakeNoteGenerator):
+                job = web_video.job_manager.create("https://example.test/watch")
+                web_video._run_import_job(job.job_id, {
+                    "pageUrl": "https://example.test/watch",
+                    "autoRun": True,
+                })
+
+            updated = web_video.job_manager.get(job.job_id)
+            self.assertEqual(updated.status, "failed")
+            update_status.assert_called_once_with(
+                updated.task_id,
+                "failed",
+                error_message="summary failed",
+                failed_step="summarize",
+            )
 
     def test_canceled_job_is_not_overwritten_by_late_updates(self):
         job = web_video.job_manager.create("https://example.test/watch")

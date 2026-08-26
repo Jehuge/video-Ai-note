@@ -43,6 +43,7 @@ NOTE_STYLES = {"simple", "detailed", "academic", "creative"}
 TERMINAL_JOB_STATUSES = {"completed", "failed", "canceled", "cancelled"}
 TASK_STATUS_TO_JOB = {
     "pending": ("imported", 92, "Waiting in AInote"),
+    "extracting": ("running_note", 96, "Extracting audio"),
     "processing": ("running_note", 96, "Extracting audio"),
     "transcribing": ("running_note", 97, "Transcribing audio"),
     "transcribed": ("running_note", 98, "Waiting to summarize"),
@@ -1408,25 +1409,40 @@ def _download_direct_url(url: str, target_path: Path, headers: Dict[str, str], j
     import requests
 
     job_manager.update(job_id, status="downloading", progress=8, message=label)
-    with requests.get(url, headers=headers, stream=True, timeout=30) as response:
-        response.raise_for_status()
-        total = int(response.headers.get("content-length") or 0)
-        downloaded = 0
-        with target_path.open("wb") as handle:
-            for chunk in response.iter_content(chunk_size=1024 * 512):
-                if not chunk:
-                    continue
-                handle.write(chunk)
-                downloaded += len(chunk)
-                if total:
-                    progress = 8 + int(downloaded * 35 / total)
-                    job_manager.update(
-                        job_id,
-                        status="downloading",
-                        progress=max(8, min(progress, 45)),
-                        message=label,
-                    )
-    return target_path
+    request_headers = dict(headers or {})
+    request_headers.setdefault("Accept-Encoding", "identity")
+    partial_path = target_path.with_suffix(target_path.suffix + ".part")
+    last_error = None
+    for attempt in range(3):
+        try:
+            with requests.get(url, headers=request_headers, stream=True, timeout=(15, 120)) as response:
+                response.raise_for_status()
+                total = int(response.headers.get("content-length") or 0)
+                downloaded = 0
+                with partial_path.open("wb") as handle:
+                    for chunk in response.iter_content(chunk_size=1024 * 512):
+                        if not chunk:
+                            continue
+                        handle.write(chunk)
+                        downloaded += len(chunk)
+                        if total:
+                            progress = 8 + int(downloaded * 35 / total)
+                            job_manager.update(
+                                job_id,
+                                status="downloading",
+                                progress=max(8, min(progress, 45)),
+                                message=label,
+                            )
+                if total and downloaded != total:
+                    raise IOError(f"下载不完整: expected {total} bytes, received {downloaded}")
+            partial_path.replace(target_path)
+            return target_path
+        except Exception as exc:
+            last_error = exc
+            partial_path.unlink(missing_ok=True)
+            if attempt < 2:
+                time.sleep(1 + attempt)
+    raise RuntimeError(f"下载媒体失败: {last_error}") from last_error
 
 
 def _download_selected_direct_media(job_id: str, payload: Dict[str, Any], suffix: str = ".mp4") -> Path:
@@ -1437,8 +1453,9 @@ def _download_selected_direct_media(job_id: str, payload: Dict[str, Any], suffix
 
     headers = dict(DEFAULT_BROWSER_HEADERS)
     headers.update({k: v for k, v in (payload.get("headers") or {}).items() if v and k.lower() not in {"cookie", "set-cookie"}})
-    if payload.get("cookies"):
-        headers["Cookie"] = payload.get("cookies")
+    cookie = payload.get("cookies") or payload.get("cookie")
+    if cookie:
+        headers["Cookie"] = cookie
     if payload.get("pageUrl") or payload.get("page_url"):
         headers["Referer"] = payload.get("pageUrl") or payload.get("page_url")
 
@@ -1498,8 +1515,9 @@ def _download_bilibili_playinfo(job_id: str, payload: Dict[str, Any]) -> Path:
 
     headers = dict(DEFAULT_BROWSER_HEADERS)
     headers.update({k: v for k, v in (payload.get("headers") or {}).items() if v and k.lower() not in {"cookie", "set-cookie"}})
-    if payload.get("cookies"):
-        headers["Cookie"] = payload.get("cookies")
+    cookie = payload.get("cookies") or payload.get("cookie")
+    if cookie:
+        headers["Cookie"] = cookie
     if payload.get("pageUrl") or payload.get("page_url"):
         headers["Referer"] = payload.get("pageUrl") or payload.get("page_url")
 
@@ -1589,7 +1607,22 @@ def _run_import_job(job_id: str, payload: Dict[str, Any]) -> None:
         current = job_manager.get(job_id)
         if current and current.task_id:
             try:
-                update_task_status(current.task_id, "failed", error_message=str(exc))
+                task = get_task_by_id(current.task_id)
+                failed_step = getattr(task, "failed_step", None)
+                if failed_step not in {"extract", "transcribe", "summarize"}:
+                    failed_step = {
+                        "extracting": "extract",
+                        "processing": "extract",
+                        "transcribing": "transcribe",
+                        "transcribed": "summarize",
+                        "summarizing": "summarize",
+                    }.get(getattr(task, "status", None), "extract")
+                update_task_status(
+                    current.task_id,
+                    "failed",
+                    error_message=str(exc),
+                    failed_step=failed_step,
+                )
             except Exception:
                 pass
         job_manager.update(job_id, status="failed", error=str(exc), message="Import failed")

@@ -88,6 +88,7 @@ npm run dev
 ### Windows
 
 ```powershell
+python -m venv backend\.venv
 .\scripts\build-windows.ps1
 ```
 

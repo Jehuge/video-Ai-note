@@ -89,18 +89,21 @@ class NoteGenerator:
         :param note_style: 笔记风格 (simple, detailed, academic, creative)
         :return: NoteResult 对象
         """
+        current_step = "extract"
         try:
             logger.info(f"开始生成笔记 (task_id={task_id}, style={note_style})")
-            update_task_status(task_id, "processing")
+            update_task_status(task_id, "extracting")
             
             # 1. 提取音频
             audio_path = self._extract_audio(video_path, task_id)
             
             # 2. 转写音频
+            current_step = "transcribe"
             update_task_status(task_id, "transcribing")
             transcript = self._transcribe_audio(audio_path, task_id)
             
             # 3. GPT 生成笔记
+            current_step = "summarize"
             update_task_status(task_id, "summarizing")
             markdown = self._summarize_text(transcript, filename, task_id, screenshot, note_style=note_style)
             
@@ -127,7 +130,7 @@ class NoteGenerator:
             
         except Exception as exc:
             logger.error(f"生成笔记失败 (task_id={task_id}): {exc}", exc_info=True)
-            update_task_status(task_id, "failed", error_message=str(exc))
+            update_task_status(task_id, "failed", error_message=str(exc), failed_step=current_step)
             raise
     
     def _extract_audio(self, video_path: str, task_id: str) -> str:

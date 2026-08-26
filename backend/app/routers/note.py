@@ -1,13 +1,21 @@
 import os
+import shutil
 import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPException, Body, Request
+from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel
 from fastapi.responses import JSONResponse
 
-from app.db.video_task_dao import create_task, get_task_by_id, get_all_tasks, update_task_status, delete_task_by_id
+from app.db.video_task_dao import (
+    create_task,
+    delete_task_by_id,
+    get_all_tasks,
+    get_task_by_id,
+    transition_task_status,
+    update_task_status,
+)
 from app.services.note import NoteGenerator
 from app.services.model_settings import load_active_model_config
 from app.services.note_progress import read_note_progress
@@ -26,6 +34,163 @@ NOTE_OUTPUT_DIR = Path(os.getenv("NOTE_OUTPUT_DIR", "note_results"))
 
 # 支持的文件类型
 ALLOWED_EXTENSIONS = {'.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm', '.m4v', '.mp3', '.wav', '.m4a'}
+NOTE_STEPS = ("extract", "transcribe", "summarize")
+STEP_RUNNING_STATUSES = {
+    "extract": "extracting",
+    "transcribe": "transcribing",
+    "summarize": "summarizing",
+}
+
+
+def _task_upload_path(task_id: str, filename: str) -> Path:
+    return UPLOAD_DIR / f"{task_id}{Path(filename).suffix.lower()}"
+
+
+def _infer_failed_step(task) -> Optional[str]:
+    failed_step = getattr(task, "failed_step", None)
+    if failed_step in NOTE_STEPS:
+        return failed_step
+    if task.status != "failed":
+        return None
+    task_id = task.task_id
+    if (NOTE_OUTPUT_DIR / f"{task_id}_transcript.json").exists():
+        return "summarize"
+    if (NOTE_OUTPUT_DIR / f"{task_id}_audio.wav").exists():
+        return "transcribe"
+    return "extract"
+
+
+def _step_running_status(step: str) -> str:
+    return STEP_RUNNING_STATUSES[step]
+
+
+def _remove_step_outputs(task_id: str, step: str) -> None:
+    outputs = {
+        "extract": (f"{task_id}_audio.wav", f"{task_id}_transcript.json", f"{task_id}_markdown.md"),
+        "transcribe": (f"{task_id}_transcript.json", f"{task_id}_markdown.md"),
+        "summarize": (f"{task_id}_markdown.md",),
+    }
+    for filename in outputs[step]:
+        (NOTE_OUTPUT_DIR / filename).unlink(missing_ok=True)
+    (NOTE_OUTPUT_DIR / f"{task_id}_progress.json").unlink(missing_ok=True)
+
+
+def _copy_task_for_step(task, step: str) -> str:
+    """Create a branch task and copy only the artifacts needed before ``step``."""
+    new_task_id = str(uuid.uuid4())
+    source_path = _task_upload_path(task.task_id, task.filename)
+    target_path = _task_upload_path(new_task_id, task.filename)
+    if not source_path.exists():
+        raise FileNotFoundError("文件不存在")
+
+    shutil.copy2(source_path, target_path)
+    try:
+        if step == "transcribe":
+            shutil.copy2(
+                NOTE_OUTPUT_DIR / f"{task.task_id}_audio.wav",
+                NOTE_OUTPUT_DIR / f"{new_task_id}_audio.wav",
+            )
+        if step == "summarize":
+            shutil.copy2(
+                NOTE_OUTPUT_DIR / f"{task.task_id}_transcript.json",
+                NOTE_OUTPUT_DIR / f"{new_task_id}_transcript.json",
+            )
+        config_file = NOTE_OUTPUT_DIR / f"{task.task_id}_model_config.json"
+        if config_file.exists():
+            shutil.copy2(config_file, NOTE_OUTPUT_DIR / f"{new_task_id}_model_config.json")
+        create_task(
+            task_id=new_task_id,
+            filename=task.filename,
+            screenshot=bool(getattr(task, "screenshot", 0)),
+            source=getattr(task, "source", "upload"),
+            source_url=getattr(task, "source_url", None),
+            status=_step_running_status(step),
+        )
+    except Exception:
+        target_path.unlink(missing_ok=True)
+        for suffix in ("_audio.wav", "_transcript.json", "_model_config.json"):
+            (NOTE_OUTPUT_DIR / f"{new_task_id}{suffix}").unlink(missing_ok=True)
+        raise
+    return new_task_id
+
+
+def _retry_task_step(
+    task_id: str,
+    step: str,
+    request: Optional[BaseModel],
+    background_tasks: BackgroundTasks,
+):
+    task = get_task_by_id(task_id)
+    if not task:
+        return R.error("任务不存在")
+    if step not in NOTE_STEPS:
+        return R.error("未知的步骤")
+
+    is_failed_retry = task.status == "failed"
+    completed_stage_statuses = {
+        "extract": {"processing", "transcribed", "completed"},
+        "transcribe": {"transcribed", "completed"},
+        "summarize": {"completed"},
+    }
+    is_completed_stage = task.status in completed_stage_statuses[step]
+    is_fork = is_completed_stage
+    is_summary_start = task.status == "transcribed" and step == "summarize"
+    if not is_failed_retry and not is_fork and not is_summary_start:
+        return R.error("当前任务状态不支持重跑该阶段")
+    if is_failed_retry and step != (_infer_failed_step(task) or step):
+        return R.error(f"请从失败阶段（{_infer_failed_step(task)}）继续")
+
+    model_config = getattr(request, "modelConfig", None) if request else None
+    note_style = getattr(request, "noteStyle", None) if request else None
+    if model_config:
+        model_config = dict(model_config)
+        model_config["_explicit_current_model"] = True
+    if note_style:
+        if model_config is None:
+            model_config = {}
+        model_config["note_style"] = note_style
+
+    run_task_id = task.task_id
+    if is_fork:
+        run_task_id = _copy_task_for_step(task, step)
+    elif not transition_task_status(
+        run_task_id,
+        {task.status},
+        _step_running_status(step),
+    ):
+        return R.error("任务状态已变化，请刷新后重试")
+
+    try:
+        _remove_step_outputs(run_task_id, step)
+        if model_config:
+            _write_task_model_config(run_task_id, model_config)
+
+        run_task = get_task_by_id(run_task_id)
+        file_path = _task_upload_path(run_task_id, run_task.filename)
+        background_tasks.add_task(
+            run_note_task_step,
+            task_id=run_task_id,
+            video_path=str(file_path),
+            filename=run_task.filename,
+            step=step,
+            screenshot=bool(getattr(run_task, "screenshot", 0)),
+        )
+    except Exception as exc:
+        update_task_status(
+            run_task_id,
+            "failed",
+            error_message=str(exc),
+            failed_step=step,
+        )
+        raise
+
+    return R.success({
+        "message": "已开始重跑阶段",
+        "task_id": run_task_id,
+        "forked": run_task_id != task.task_id,
+        "step": step,
+        "status": _step_running_status(step),
+    })
 
 
 def _merge_model_config_with_active(task_config: Optional[dict] = None) -> Optional[dict]:
@@ -52,6 +217,8 @@ def _write_task_model_config(task_id: str, model_config: Optional[dict]) -> None
 def run_note_task_step(task_id: str, video_path: str, filename: str, step: str, screenshot: bool = False):
     """执行单个步骤"""
     try:
+        update_task_status(task_id, _step_running_status(step))
+
         # 尝试读取模型配置
         model_config = None
         config_file = NOTE_OUTPUT_DIR / f"{task_id}_model_config.json"
@@ -91,11 +258,16 @@ def run_note_task_step(task_id: str, video_path: str, filename: str, step: str, 
             
         elif step == "transcribe":
             # 转写音频
-            update_task_status(task_id, "transcribing")
-            transcript = generator._transcribe_audio(
-                generator._extract_audio(video_path, task_id),
-                task_id
-            )
+            audio_file = NOTE_OUTPUT_DIR / f"{task_id}_audio.wav"
+            if not audio_file.exists():
+                update_task_status(
+                    task_id,
+                    "failed",
+                    error_message="音频文件不存在，请先重新执行音频提取",
+                    failed_step="extract",
+                )
+                return
+            transcript = generator._transcribe_audio(str(audio_file), task_id)
             update_task_status(task_id, "transcribed")
             logger.info(f"转写完成: {task_id}")
             
@@ -104,7 +276,12 @@ def run_note_task_step(task_id: str, video_path: str, filename: str, step: str, 
             transcript_file = NOTE_OUTPUT_DIR / f"{task_id}_transcript.json"
             if not transcript_file.exists():
                 logger.error(f"转录文件不存在: {task_id}")
-                update_task_status(task_id, "failed", error_message="转录文件不存在，请先重新执行音频转写")
+                update_task_status(
+                    task_id,
+                    "failed",
+                    error_message="转录文件不存在，请先重新执行音频转写",
+                    failed_step="transcribe",
+                )
                 return
             
             # 如果启用了截图，删除缓存强制重新生成（确保包含截图标记）
@@ -114,10 +291,11 @@ def run_note_task_step(task_id: str, video_path: str, filename: str, step: str, 
                     cache_file.unlink()
                     logger.info(f"已删除缓存以重新生成带截图的笔记: {cache_file}")
             
-            # 生成笔记
-            update_task_status(task_id, "summarizing")
-            audio_path = generator._extract_audio(video_path, task_id)
-            transcript = generator._transcribe_audio(audio_path, task_id)
+            # 生成笔记；转录结果已在进入该阶段前生成。
+            transcript = generator._transcribe_audio(
+                str(NOTE_OUTPUT_DIR / f"{task_id}_audio.wav"),
+                task_id,
+            )
             # 如果启用了截图，禁用缓存确保重新生成
             markdown = generator._summarize_text(transcript, filename, task_id, screenshot, use_cache=not screenshot, note_style=note_style)
             
@@ -137,7 +315,7 @@ def run_note_task_step(task_id: str, video_path: str, filename: str, step: str, 
             
     except Exception as e:
         logger.error(f"步骤执行失败: {task_id}, step={step}, 错误: {e}", exc_info=True)
-        update_task_status(task_id, "failed", error_message=str(e))
+        update_task_status(task_id, "failed", error_message=str(e), failed_step=step)
 
 
 @router.post("/upload")
@@ -251,6 +429,7 @@ def get_task(task_id: str):
             "filename": task.filename,
             "status": task.status,
             "error_message": getattr(task, "error_message", None),
+            "failed_step": getattr(task, "failed_step", None) or _infer_failed_step(task),
             "source": getattr(task, "source", "upload"),
             "source_url": getattr(task, "source_url", None),
             "created_at": task.created_at.isoformat() if task.created_at else None,
@@ -292,6 +471,7 @@ def list_tasks(limit: int = 50):
                 "filename": task.filename,
                 "status": task.status,
                 "error_message": getattr(task, "error_message", None),
+                "failed_step": getattr(task, "failed_step", None) or _infer_failed_step(task),
                 "source": getattr(task, "source", "upload"),
                 "source_url": getattr(task, "source_url", None),
                 "created_at": task.created_at.isoformat() if task.created_at else None,
@@ -304,102 +484,25 @@ def list_tasks(limit: int = 50):
         return R.error(f"获取任务列表失败: {str(e)}")
 
 
-class RegenerateRequest(BaseModel):
+class RetryStepRequest(BaseModel):
+    step: str
     modelConfig: Optional[dict] = None  # 使用驼峰命名，避免与 Pydantic 的 model_config 冲突
     noteStyle: Optional[str] = None
 
-@router.post("/task/{task_id}/regenerate")
-def regenerate_note(
-    task_id: str, 
-    request: RegenerateRequest = Body(None),
-    background_tasks: BackgroundTasks = BackgroundTasks()
+
+@router.post("/task/{task_id}/retry")
+def retry_task_step(
+    task_id: str,
+    request: RetryStepRequest,
+    background_tasks: BackgroundTasks,
 ):
-    """重新生成笔记"""
+    """重跑指定阶段；失败任务原地续跑，已完成任务自动创建分支。"""
     try:
-        # 检查任务是否存在
-        task = get_task_by_id(task_id)
-        if not task:
-            return R.error("任务不存在")
-        
-        # 检查转录是否完成
-        transcript_file = NOTE_OUTPUT_DIR / f"{task_id}_transcript.json"
-        if not transcript_file.exists():
-            return R.error("请先完成音频转写")
-        
-        # 获取文件路径
-        file_ext = Path(task.filename).suffix.lower()
-        file_path = UPLOAD_DIR / f"{task_id}{file_ext}"
-        
-        if not file_path.exists():
-            return R.error("文件不存在")
-        
-        # 获取截图设置
-        screenshot = bool(getattr(task, 'screenshot', 0))
-        
-        # 获取模型配置（如果提供）
-        model_config_dict = None
-        if request and request.modelConfig:
-            model_config_dict = dict(request.modelConfig)
-            model_config_dict["_explicit_current_model"] = True
-            logger.info(f"重新生成时收到模型配置: provider={model_config_dict.get('provider')}, model={model_config_dict.get('model')}")
-        
-        # 如果没有提供模型配置，尝试从文件读取（兼容旧任务）
-        if not model_config_dict:
-            config_file = NOTE_OUTPUT_DIR / f"{task_id}_model_config.json"
-            if config_file.exists():
-                try:
-                    import json
-                    with open(config_file, "r", encoding="utf-8") as f:
-                        model_config_dict = json.load(f)
-                    logger.info(
-                        "从文件加载模型配置: "
-                        f"provider={model_config_dict.get('provider')}, "
-                        f"type={model_config_dict.get('provider_type')}, "
-                        f"model={model_config_dict.get('model')}, "
-                        f"style={model_config_dict.get('note_style')}"
-                    )
-                except Exception as e:
-                    logger.warning(f"读取模型配置失败: {e}")
-        
-        # 更新 note_style
-        if request and request.noteStyle:
-            if model_config_dict is None:
-                model_config_dict = {}
-            model_config_dict["note_style"] = request.noteStyle
-        
-        # 保存或更新模型配置到文件
-        if model_config_dict:
-            config_file = NOTE_OUTPUT_DIR / f"{task_id}_model_config.json"
-            with open(config_file, "w", encoding="utf-8") as f:
-                import json
-                json.dump(model_config_dict, f, ensure_ascii=False, indent=2)
-            logger.info(f"已保存模型配置到: {config_file}")
-        
-        # 删除旧的笔记缓存，强制重新生成
-        cache_file = NOTE_OUTPUT_DIR / f"{task_id}_markdown.md"
-        if cache_file.exists():
-            cache_file.unlink()
-            logger.info(f"已删除旧笔记缓存: {cache_file}")
-        
-        # 更新状态为 summarizing
-        update_task_status(task_id, "summarizing")
-        
-        # 在后台重新生成笔记（模型配置会在 run_note_task_step 中读取）
-        background_tasks.add_task(
-            run_note_task_step,
-            task_id=task_id,
-            video_path=str(file_path),
-            filename=task.filename,
-            step="summarize",
-            screenshot=screenshot
-        )
-        
-        logger.info(f"开始重新生成笔记: {task_id}")
-        return R.success({"message": "正在重新生成笔记"})
-        
+        return _retry_task_step(task_id, request.step, request, background_tasks)
     except Exception as e:
-        logger.error(f"重新生成笔记失败: {e}", exc_info=True)
-        return R.error(f"重新生成笔记失败: {str(e)}")
+        logger.error(f"重跑任务阶段失败: {e}", exc_info=True)
+        return R.error(f"重跑任务阶段失败: {str(e)}")
+
 
 
 class ConfirmStepRequest(BaseModel):
@@ -415,64 +518,65 @@ def confirm_step(task_id: str, request: ConfirmStepRequest, background_tasks: Ba
         task = get_task_by_id(task_id)
         if not task:
             return R.error("任务不存在")
+
+        if task.status == "failed":
+            return _retry_task_step(task_id, request.step, request, background_tasks)
         
         # 获取文件路径
-        file_ext = Path(task.filename).suffix.lower()
-        file_path = UPLOAD_DIR / f"{task_id}{file_ext}"
+        file_path = _task_upload_path(task_id, task.filename)
         
         if not file_path.exists():
             return R.error("文件不存在")
         
         # 获取截图设置（从数据库获取）
         screenshot = bool(getattr(task, 'screenshot', 0))
+        model_config = None
         if request.modelConfig:
             model_config = dict(request.modelConfig)
             model_config["_explicit_current_model"] = True
             if request.noteStyle:
                 model_config["note_style"] = request.noteStyle
-            _write_task_model_config(task_id, model_config)
         
-        # 根据步骤执行相应的任务
         step = request.step
-        if step == "extract":
-            if task.status != "pending":
-                return R.error("当前步骤不可执行")
-            background_tasks.add_task(
-                run_note_task_step,
-                task_id=task_id,
-                video_path=str(file_path),
-                filename=task.filename,
-                step="extract",
-                screenshot=screenshot
-            )
-        elif step == "transcribe":
-            if task.status != "processing":
-                return R.error("当前步骤不可执行")
-            background_tasks.add_task(
-                run_note_task_step,
-                task_id=task_id,
-                video_path=str(file_path),
-                filename=task.filename,
-                step="transcribe",
-                screenshot=screenshot
-            )
-        elif step == "summarize":
-            # 检查转录是否完成（通过检查转录文件是否存在）
+        expected_statuses = {
+            "extract": {"pending"},
+            "transcribe": {"processing"},
+            "summarize": {"transcribed"},
+        }
+        if step not in expected_statuses or task.status not in expected_statuses[step]:
+            return R.error("当前步骤不可执行")
+
+        if step == "summarize":
             transcript_file = NOTE_OUTPUT_DIR / f"{task_id}_transcript.json"
-            if task.status not in {"transcribing", "transcribed"} and not transcript_file.exists():
+            if not transcript_file.exists():
                 return R.error("请先完成音频转写")
+
+        if not transition_task_status(
+            task_id,
+            expected_statuses[step],
+            _step_running_status(step),
+        ):
+            return R.error("任务状态已变化，请刷新后重试")
+
+        try:
+            if model_config:
+                _write_task_model_config(task_id, model_config)
             background_tasks.add_task(
                 run_note_task_step,
                 task_id=task_id,
                 video_path=str(file_path),
                 filename=task.filename,
-                step="summarize",
-                screenshot=screenshot
+                step=step,
+                screenshot=screenshot,
             )
-        else:
-            return R.error("未知的步骤")
-        
-        return R.success({"message": "步骤已确认，开始执行"})
+        except Exception:
+            update_task_status(task_id, task.status)
+            raise
+
+        return R.success({
+            "message": "步骤已确认，开始执行",
+            "status": _step_running_status(step),
+        })
         
     except Exception as e:
         logger.error(f"确认步骤失败: {e}", exc_info=True)

@@ -5,6 +5,7 @@ These scripts build the packaged pywebview desktop app after compiling the React
 ## Windows
 
 ```powershell
+python -m venv backend\.venv
 .\scripts\build-windows.ps1
 ```
 

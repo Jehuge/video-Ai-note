@@ -45,78 +45,96 @@ export default function EnhancedMarkdownViewer({
   const handleDownloadMarkdown = async () => {
     try {
       toast.loading('正在处理图片，请稍候...', { id: 'markdown-processing' })
-      
-      const name = filename?.replace(/\.[^/.]+$/, '') || 'note'
-      
-      // 将 markdown 中的图片路径转换为 base64
+
+      const name = (filename?.replace(/\.[^/.]+$/, '') || 'note').replace(/[\\/:*?"<>|]/g, '_')
+      const { default: JSZip } = await import('jszip')
+      const zip = new JSZip()
       let processedMarkdown = markdown
-      const imageRegex = /!\[\]\((.*?)\)/g
+      const imageRegex = /!\[([^\]]*)\]\(([^)]+)\)/g
       const imageMatches = Array.from(markdown.matchAll(imageRegex))
-      
-      // 处理所有图片
-      for (const match of imageMatches) {
-        const imageUrl = match[1]
-        
-        // 如果已经是 base64，跳过
-        if (imageUrl.startsWith('data:')) {
-          continue
+
+      const usedNames = new Set<string>()
+      const uniqueImageName = (rawName: string, index: number, mimeType?: string) => {
+        const fallbackExtension = mimeType?.split('/')[1]?.split(';')[0] || 'bin'
+        const safeName = (rawName || `image-${index + 1}.${fallbackExtension}`)
+          .split(/[?#]/, 1)[0]
+          .split(/[\\/]/)
+          .pop() || `image-${index + 1}.${fallbackExtension}`
+        const base = safeName.replace(/[^a-zA-Z0-9._-]/g, '_') || `image-${index + 1}.${fallbackExtension}`
+        let candidate = base
+        let suffix = 1
+        while (usedNames.has(candidate)) {
+          const dot = base.lastIndexOf('.')
+          candidate = `${dot > 0 ? base.slice(0, dot) : base}-${suffix}${dot > 0 ? base.slice(dot) : ''}`
+          suffix += 1
         }
-        
+        usedNames.add(candidate)
+        return `images/${candidate}`
+      }
+
+      const dataUrlToBlob = (dataUrl: string) => {
+        const [header, encoded] = dataUrl.split(',', 2)
+        if (!header || !encoded) throw new Error('Invalid image data URL')
+        const mimeType = header.match(/^data:([^;]+)/i)?.[1] || 'application/octet-stream'
+        const binary = atob(encoded)
+        const bytes = new Uint8Array(binary.length)
+        for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
+        return { blob: new Blob([bytes], { type: mimeType }), mimeType }
+      }
+
+      for (const [index, match] of imageMatches.entries()) {
+        const imageUrl = match[2].trim()
         try {
-          // 构建完整的图片 URL
-          let fullImageUrl = imageUrl
-          if (imageUrl.startsWith('/api/')) {
-            // 已经是完整路径，使用 baseURL
-            const apiBaseURL = import.meta.env.VITE_API_BASE_URL || ''
-            if (apiBaseURL && !imageUrl.startsWith('http')) {
-              fullImageUrl = `${apiBaseURL}${imageUrl}`
-            } else if (!imageUrl.startsWith('http')) {
-              // 使用当前页面的 origin
+          let blob: Blob
+          let mimeType: string | undefined
+          let sourceName = imageUrl
+          if (imageUrl.startsWith('data:')) {
+            const data = dataUrlToBlob(imageUrl)
+            blob = data.blob
+            mimeType = data.mimeType
+            sourceName = `image-${index + 1}.${mimeType.split('/')[1]?.split(';')[0] || 'bin'}`
+          } else {
+            let fullImageUrl = imageUrl
+            if (imageUrl.startsWith('/api/')) {
+              const apiBaseURL = import.meta.env.VITE_API_BASE_URL || ''
+              fullImageUrl = apiBaseURL
+                ? `${apiBaseURL.replace(/\/$/, '')}${imageUrl.replace(/^\/api/, '')}`
+                : `${window.location.origin}${imageUrl}`
+            } else if (imageUrl.startsWith('/')) {
               fullImageUrl = `${window.location.origin}${imageUrl}`
             }
-          } else if (imageUrl.startsWith('/')) {
-            fullImageUrl = `${window.location.origin}${imageUrl}`
+            const response = await fetch(fullImageUrl)
+            if (!response.ok) throw new Error(`HTTP ${response.status}`)
+            blob = await response.blob()
+            mimeType = blob.type || undefined
           }
-          
-          // 获取图片并转换为 base64
-          const response = await fetch(fullImageUrl)
-          if (response.ok) {
-            const blob = await response.blob()
-            const reader = new FileReader()
-            const base64 = await new Promise<string>((resolve, reject) => {
-              reader.onloadend = () => {
-                if (typeof reader.result === 'string') {
-                  resolve(reader.result)
-                } else {
-                  reject(new Error('Failed to convert image to base64'))
-                }
-              }
-              reader.onerror = reject
-              reader.readAsDataURL(blob)
-            })
-            
-            // 替换 markdown 中的图片路径
-            processedMarkdown = processedMarkdown.replace(match[0], `![](${base64})`)
-          } else {
-            console.warn(`Failed to fetch image: ${fullImageUrl}`)
-          }
+
+          const archivePath = uniqueImageName(sourceName, index, mimeType)
+          zip.file(archivePath, blob)
+          processedMarkdown = processedMarkdown.replace(match[0], `![${match[1]}](${archivePath})`)
         } catch (error) {
           console.error(`Error processing image ${imageUrl}:`, error)
-          // 如果图片处理失败，保留原路径
+          // 图片无法获取时保留原链接，至少不丢失 Markdown 内容。
         }
       }
-      
-      const blob = new Blob([processedMarkdown], { type: 'text/markdown;charset=utf-8' })
+
+      zip.file(`${name}.md`, processedMarkdown)
+      const blob = await zip.generateAsync({
+        type: 'blob',
+        compression: 'DEFLATE',
+        compressionOptions: { level: 6 },
+      })
       const link = document.createElement('a')
-      link.href = URL.createObjectURL(blob)
-      link.download = `${name}.md`
+      const url = URL.createObjectURL(blob)
+      link.href = url
+      link.download = `${name}.zip`
       document.body.appendChild(link)
       link.click()
       document.body.removeChild(link)
-      URL.revokeObjectURL(link.href)
-      
+      URL.revokeObjectURL(url)
+
       toast.dismiss('markdown-processing')
-      toast.success('Markdown文件已下载（图片已嵌入）')
+      toast.success('Markdown压缩包已下载（含索引图片）')
     } catch (error) {
       console.error('下载 Markdown 失败:', error)
       toast.dismiss('markdown-processing')
@@ -306,10 +324,10 @@ export default function EnhancedMarkdownViewer({
           <button
             onClick={handleDownloadMarkdown}
             className="flex items-center gap-2 px-3 py-1.5 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors"
-            title="下载Markdown文件"
+            title="下载Markdown压缩包（包含索引图片）"
           >
             <Download className="w-4 h-4" />
-            Markdown
+            Markdown ZIP
           </button>
           <button
             onClick={handleDownloadPDF}

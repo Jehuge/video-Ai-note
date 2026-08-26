@@ -36,6 +36,7 @@ dist-ssr/
 # IDE
 .vscode/
 .idea/
+.codegraph/
 *.swp
 *.swo
 *.suo
