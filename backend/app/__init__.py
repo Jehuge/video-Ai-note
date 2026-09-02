@@ -11,11 +11,12 @@ def create_app(lifespan=None) -> FastAPI:
     )
     
     # 注册路由
-    from app.routers import note, model, bili_download, extension, transcriber
+    from app.routers import note, model, bili_download, extension, note_styles, transcriber
     
     app.include_router(note.router, prefix="/api", tags=["note"])
     app.include_router(model.router, prefix="/api", tags=["model"])
     app.include_router(transcriber.router, prefix="/api", tags=["transcriber"])
+    app.include_router(note_styles.router, prefix="/api", tags=["note-styles"])
     app.include_router(bili_download.router, prefix="/api", tags=["bili"])
     app.include_router(extension.router, prefix="/api", tags=["extension"])
     

@@ -1,3 +1,4 @@
+import json
 import sys
 import unittest
 from types import SimpleNamespace
@@ -211,6 +212,15 @@ class NoteStepTests(unittest.TestCase):
             (upload_dir / "task-failed.mp4").write_bytes(b"video")
             (output_dir / "task-failed_audio.wav").write_bytes(b"audio")
             (output_dir / "task-failed_transcript.json").write_text("{}", encoding="utf-8")
+            (output_dir / "task-failed_model_config.json").write_text(
+                json.dumps({
+                    "provider": "demo-provider",
+                    "api_key": "secret",
+                    "model": "demo-model",
+                    "note_style": "academic",
+                }),
+                encoding="utf-8",
+            )
             background_tasks = BackgroundTasks()
 
             with mock.patch.object(note, "NOTE_OUTPUT_DIR", output_dir), \
@@ -223,12 +233,123 @@ class NoteStepTests(unittest.TestCase):
                     note.RetryStepRequest(step="summarize", noteStyle="simple"),
                     background_tasks,
                 )
+                saved_config = json.loads(
+                    (output_dir / "task-failed_model_config.json").read_text(encoding="utf-8")
+                )
 
         self.assertEqual(response["code"], 200)
         self.assertEqual(response["data"]["task_id"], "task-failed")
         self.assertEqual(response["data"]["status"], "summarizing")
         transition_status.assert_called_once_with("task-failed", {"failed"}, "summarizing")
         self.assertEqual(len(background_tasks.tasks), 1)
+        self.assertEqual(saved_config["api_key"], "secret")
+        self.assertEqual(saved_config["model"], "demo-model")
+        self.assertEqual(saved_config["note_style"], "simple")
+        self.assertTrue(saved_config["note_style_prompt"])
+
+    def test_summary_retry_without_style_keeps_task_snapshot(self):
+        task = SimpleNamespace(
+            task_id="task-snapshot",
+            filename="video.mp4",
+            status="failed",
+            failed_step="summarize",
+            screenshot=0,
+            source="upload",
+            source_url=None,
+        )
+
+        with TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "notes"
+            upload_dir = Path(tmp) / "uploads"
+            output_dir.mkdir()
+            upload_dir.mkdir()
+            (upload_dir / "task-snapshot.mp4").write_bytes(b"video")
+            (output_dir / "task-snapshot_model_config.json").write_text(
+                json.dumps({
+                    "provider": "old-provider",
+                    "api_key": "old-secret",
+                    "model": "old-model",
+                    "note_style": "custom-tutorial",
+                    "note_style_name": "教程模式",
+                    "note_style_prompt": "保留命令和参数。",
+                }),
+                encoding="utf-8",
+            )
+            background_tasks = BackgroundTasks()
+
+            with mock.patch.object(note, "NOTE_OUTPUT_DIR", output_dir), \
+                    mock.patch.object(note, "UPLOAD_DIR", upload_dir), \
+                    mock.patch.object(note, "get_task_by_id", side_effect=[task, task]), \
+                    mock.patch.object(note, "transition_task_status", return_value=True):
+                response = note._retry_task_step(
+                    "task-snapshot",
+                    "summarize",
+                    note.RetryStepRequest(
+                        step="summarize",
+                        modelConfig={
+                            "provider": "new-provider",
+                            "api_key": "new-secret",
+                            "model": "new-model",
+                        },
+                    ),
+                    background_tasks,
+                )
+            saved_config = json.loads(
+                (output_dir / "task-snapshot_model_config.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(response["code"], 200)
+        self.assertEqual(saved_config["provider"], "new-provider")
+        self.assertEqual(saved_config["model"], "new-model")
+        self.assertEqual(saved_config["note_style"], "custom-tutorial")
+        self.assertEqual(saved_config["note_style_prompt"], "保留命令和参数。")
+
+    def test_summary_retry_without_style_preserves_existing_model(self):
+        task = SimpleNamespace(
+            task_id="task-preserve-model",
+            filename="video.mp4",
+            status="failed",
+            failed_step="summarize",
+            screenshot=0,
+            source="upload",
+            source_url=None,
+        )
+
+        with TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "notes"
+            output_dir.mkdir()
+            (output_dir / "task-preserve-model_model_config.json").write_text(
+                json.dumps({
+                    "provider": "old-provider",
+                    "api_key": "old-secret",
+                    "model": "old-model",
+                    "note_style": "custom-tutorial",
+                    "note_style_name": "教程模式",
+                    "note_style_prompt": "保留命令和参数。",
+                }),
+                encoding="utf-8",
+            )
+            background_tasks = BackgroundTasks()
+
+            with mock.patch.object(note, "NOTE_OUTPUT_DIR", output_dir), \
+                    mock.patch.object(note, "get_task_by_id", side_effect=[task, task]), \
+                    mock.patch.object(note, "transition_task_status", return_value=True):
+                response = note._retry_task_step(
+                    "task-preserve-model",
+                    "summarize",
+                    note.RetryStepRequest(step="summarize"),
+                    background_tasks,
+                )
+            saved_config = json.loads(
+                (output_dir / "task-preserve-model_model_config.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(response["code"], 200)
+        self.assertEqual(saved_config["provider"], "old-provider")
+        self.assertEqual(saved_config["api_key"], "old-secret")
+        self.assertEqual(saved_config["model"], "old-model")
+        self.assertEqual(saved_config["note_style"], "custom-tutorial")
+        self.assertEqual(saved_config["note_style_prompt"], "保留命令和参数。")
 
     def test_completed_task_forks_before_rerunning_stage(self):
         task = SimpleNamespace(

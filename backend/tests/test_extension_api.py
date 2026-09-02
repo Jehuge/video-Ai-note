@@ -187,6 +187,30 @@ class ExtensionApiTests(unittest.TestCase):
         self.assertTrue(data["taskId"])
         self.assertEqual(data["pageUrl"], "https://example.test/watch")
 
+    def test_import_captures_server_note_style_snapshot(self):
+        job = mock.Mock(job_id="job-snapshot", status="queued", progress=0)
+        style_snapshot = {
+            "note_style": "custom-tutorial",
+            "note_style_name": "教程模式",
+            "note_style_prompt": "保留命令和参数。",
+        }
+
+        with mock.patch.object(extension, "apply_note_style_snapshot", return_value=style_snapshot), \
+                mock.patch.object(extension, "start_import_job", return_value=job) as start_job:
+            response = self.client.post(
+                "/extension/videos/import",
+                json={
+                    "pageUrl": "https://example.test/watch",
+                    "noteStyle": "custom-tutorial",
+                },
+                headers=self.auth_headers(),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = start_job.call_args.args[0]
+        self.assertEqual(payload["noteStyleSnapshot"], style_snapshot)
+        self.assertEqual(response.json()["data"]["jobId"], "job-snapshot")
+
     def test_job_status_syncs_to_canceled_when_app_task_is_deleted(self):
         job = web_video.job_manager.create("https://example.test/watch")
         web_video.job_manager.update(

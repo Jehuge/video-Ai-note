@@ -6,6 +6,7 @@ import StepProgress, { StepStatus } from './StepProgress'
 import ContentPreviewModal from './ContentPreviewModal'
 import MarkdownContent from './MarkdownContent'
 import toast from 'react-hot-toast'
+import { useNoteStyles } from '../hooks/useNoteStyles'
 
 interface TaskStepsProps {
   taskId: string
@@ -21,14 +22,24 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
     content: any
     title: string
   } | null>(null)
-  const [noteStyle, setNoteStyle] = useState('simple')
+  const [noteStyle, setNoteStyle] = useState('')
+  const [styleTouched, setStyleTouched] = useState(false)
+  const { enabledStyles, defaultStyleId, loaded: noteStylesLoaded } = useNoteStyles()
+  const selectedNoteStyle = noteStyle || defaultStyleId
 
-  const noteStyles = [
-    { value: 'simple', label: '简洁模式 (默认)' },
-    { value: 'detailed', label: '详细模式' },
-    { value: 'academic', label: '学术模式' },
-    { value: 'creative', label: '创意模式' },
-  ]
+  const noteStyles = enabledStyles.map((style) => ({
+    value: style.id,
+    label: `${style.name}${style.id === defaultStyleId ? ' (默认)' : ''}`,
+  }))
+
+  useEffect(() => {
+    if (!noteStylesLoaded) return
+    const selectionIsValid = enabledStyles.some((style) => style.id === noteStyle)
+    if (!styleTouched || (noteStyle && !selectionIsValid)) {
+      setNoteStyle(defaultStyleId)
+      if (!selectionIsValid) setStyleTouched(false)
+    }
+  }, [defaultStyleId, enabledStyles, noteStyle, noteStylesLoaded, styleTouched])
 
   // 初始化步骤
   useEffect(() => {
@@ -178,8 +189,11 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
           <div className="mt-4 flex flex-col sm:flex-row gap-3">
             <div className="relative">
               <select
-                value={noteStyle}
-                onChange={(e) => setNoteStyle(e.target.value)}
+                value={selectedNoteStyle}
+                onChange={(e) => {
+                  setStyleTouched(true)
+                  setNoteStyle(e.target.value)
+                }}
                 className="appearance-none block w-full sm:w-48 pl-4 pr-10 py-2.5 text-sm border border-slate-200 rounded-lg bg-slate-50 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all cursor-pointer hover:bg-white hover:border-blue-300"
                 onClick={(e) => e.stopPropagation()}
               >
@@ -248,8 +262,11 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
           <div className="mt-4 pt-4 border-t border-slate-100 flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
             <div className="relative">
               <select
-                value={noteStyle}
-                onChange={(e) => setNoteStyle(e.target.value)}
+                value={selectedNoteStyle}
+                onChange={(e) => {
+                  setStyleTouched(true)
+                  setNoteStyle(e.target.value)
+                }}
                 className="appearance-none block w-full sm:w-40 pl-3 pr-8 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all cursor-pointer hover:border-blue-300 shadow-sm"
               >
                 {noteStyles.map((style) => (
@@ -281,7 +298,7 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
     ]
 
     setSteps(initialSteps)
-  }, [task, transcript, noteStyle])
+  }, [task, transcript, selectedNoteStyle])
 
   const tasksRef = useRef(tasks)
   const updateTaskRef = useRef(updateTask)
@@ -546,13 +563,17 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
   }
 
   const handleStageRetry = async (stepId: string): Promise<void> => {
+    if (stepId === 'summarize' && !noteStylesLoaded) {
+      toast.error('笔记模式仍在加载，请稍后再试')
+      return
+    }
     const previousStatus = (steps.find((step) => step.id === stepId)?.status || 'waiting_confirm') as StepStatus
     setSteps((prev) =>
       prev.map((step) => step.id === stepId ? { ...step, status: 'processing' as StepStatus } : step)
     )
 
     try {
-      const response = await retryTaskStep(taskId, stepId, stepId === 'summarize' ? noteStyle : undefined)
+      const response = await retryTaskStep(taskId, stepId, stepId === 'summarize' ? selectedNoteStyle : undefined)
       if (response.data.code !== 200) {
         throw new Error(response.data.msg || '重新生成失败')
       }
@@ -588,6 +609,10 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
 
   const handleStepConfirm = async (stepId: string) => {
     try {
+      if (stepId === 'summarize' && !noteStylesLoaded) {
+        toast.error('笔记模式仍在加载，请稍后再试')
+        return
+      }
       if (task.status === 'failed' && task.failedStep === stepId) {
         await handleStageRetry(stepId)
         return
@@ -599,7 +624,7 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
         )
       )
 
-      const response = await confirmStep(taskId, stepId, stepId === 'summarize' ? noteStyle : undefined)
+      const response = await confirmStep(taskId, stepId, stepId === 'summarize' ? selectedNoteStyle : undefined)
       if (response.data.code !== 200) {
         throw new Error(response.data.msg || '开始处理失败')
       }

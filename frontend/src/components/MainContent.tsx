@@ -4,7 +4,7 @@ import TaskSteps from './TaskSteps'
 import ModelConfig from './ModelConfig'
 import UploadZone from './UploadZone'
 import BiliDownload from '../pages/BiliDownload'
-import TranscriberSettings from './TranscriberSettings'
+import SettingsPage from './SettingsPage'
 
 interface MainContentProps {
   activeMenu: 'home' | 'upload' | 'model' | 'settings' | 'bili'
@@ -24,7 +24,7 @@ export default function MainContent({ activeMenu }: MainContentProps) {
 
 
   if (activeMenu === 'settings') {
-    return <TranscriberSettings />
+    return <SettingsPage />
   }
 
   // 首页：任务列表 + 步骤

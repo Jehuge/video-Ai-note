@@ -1,8 +1,8 @@
 @echo off
 REM ============================================
-REM  One-click dev startup (Windows)
-REM  - Backend FastAPI : http://localhost:8483
-REM  - Frontend Vite   : http://localhost:5173
+REM  One-click development startup (Windows)
+REM  app_entry starts Vite first, then the backend.
+REM  Closing the development entry process stops both services.
 REM ============================================
 setlocal
 
@@ -23,25 +23,22 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [1/2] Starting backend (port 8483)...
-start "video-ai-note-backend" /D "%ROOT%backend" cmd /k ""%BACKEND_PYTHON%" main.py"
-
-echo Waiting for backend to become ready...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$deadline = (Get-Date).AddSeconds(60); do { try { $response = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8483/api/tasks?limit=1' -TimeoutSec 2; if ($response.StatusCode -eq 200) { exit 0 } } catch {}; Start-Sleep -Milliseconds 500 } while ((Get-Date) -lt $deadline); exit 1"
-if errorlevel 1 (
-    echo [ERROR] Backend did not become ready within 60 seconds.
+if not exist "%ROOT%frontend\node_modules" (
+    echo [ERROR] Frontend dependencies not found.
+    echo Run: cd /d "%ROOT%frontend" ^&^& npm install
     pause
     exit /b 1
 )
 
-echo [2/2] Starting frontend (port 5173)...
-start "video-ai-note-frontend" /D "%ROOT%frontend" cmd /k "npm run dev"
+echo Starting Video Note AI development entrypoint...
+cd /d "%ROOT%backend"
+"%BACKEND_PYTHON%" app_entry.py --dev
+set "EXIT_CODE=%ERRORLEVEL%"
 
-echo.
-echo Both services started in separate windows:
-echo    Frontend: http://localhost:5173
-echo    Backend : http://localhost:8483/docs
-echo.
-echo Close the corresponding window to stop a service.
-endlocal
-pause
+if not "%EXIT_CODE%"=="0" (
+    echo.
+    echo [ERROR] Video Note AI exited with code %EXIT_CODE%.
+    pause
+)
+
+endlocal & exit /b %EXIT_CODE%

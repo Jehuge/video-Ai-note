@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from app.db.video_task_dao import create_task, get_task_by_id, update_task_status
 from app.services.model_settings import load_active_model_config
 from app.services.note import NoteGenerator
+from app.services.note_style_settings import apply_note_style_snapshot
 from app.services.note_progress import read_note_progress
 from app.utils.ffmpeg_helper import get_ffmpeg_path
 from app.utils.logger import get_logger
@@ -39,7 +40,6 @@ DEFAULT_BROWSER_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
 }
-NOTE_STYLES = {"simple", "detailed", "academic", "creative"}
 TERMINAL_JOB_STATUSES = {"completed", "failed", "canceled", "cancelled"}
 TASK_STATUS_TO_JOB = {
     "pending": ("imported", 92, "Waiting in AInote"),
@@ -1554,10 +1554,6 @@ def _write_model_config(task_id: str, model_config: Optional[dict]) -> None:
     config_file.write_text(json.dumps(model_config, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _payload_note_style(payload: Dict[str, Any], default: str = "simple") -> str:
-    style = payload.get("noteStyle") or payload.get("note_style") or default
-    return style if style in NOTE_STYLES else default
-
 
 def _run_import_job(job_id: str, payload: Dict[str, Any]) -> None:
     downloaded_path: Optional[Path] = None
@@ -1586,8 +1582,20 @@ def _run_import_job(job_id: str, payload: Dict[str, Any]) -> None:
         )
 
         model_config = load_active_model_config() or {}
-        note_style = _payload_note_style(payload, model_config.get("note_style", "simple"))
-        model_config["note_style"] = note_style
+        style_snapshot = payload.get("noteStyleSnapshot") or {}
+        if style_snapshot:
+            model_config.update(style_snapshot)
+        else:
+            requested_style = payload.get("noteStyle") or payload.get("note_style")
+            if not requested_style:
+                for key in ("note_style", "note_style_name", "note_style_prompt"):
+                    model_config.pop(key, None)
+            model_config = apply_note_style_snapshot(
+                model_config,
+                requested_style,
+                preserve_existing=False,
+            )
+        note_style = model_config["note_style"]
         _write_model_config(task_id, model_config)
         job_manager.update(job_id, task_id=task_id, filename=filename, progress=95)
 

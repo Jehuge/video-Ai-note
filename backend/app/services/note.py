@@ -252,6 +252,7 @@ class NoteGenerator:
             screenshot,
             note_style,
             progress_callback=on_note_progress,
+            note_style_prompt=(self.model_config or {}).get("note_style_prompt"),
         )
         
         # 清理 AI 输出中的思考过程标签（redacted_reasoning）

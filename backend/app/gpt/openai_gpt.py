@@ -48,10 +48,12 @@ class OpenAIGPT(GPT):
         screenshot: bool = False,
         note_style: str = "simple",
         progress_callback: Optional[ProgressCallback] = None,
+        note_style_prompt: Optional[str] = None,
     ) -> str:
         logger.info(f"Start note generation (screenshot={screenshot}, style={note_style})")
 
-        prompt = self._build_prompt(transcript, filename, screenshot, note_style)
+        style_instruction = self._resolve_style_instruction(note_style, note_style_prompt)
+        prompt = self._build_prompt(transcript, filename, screenshot, style_instruction)
         system_content = (
             "You are a professional video-note assistant. Write clear, well-structured, "
             "information-rich Chinese Markdown notes from video transcripts."
@@ -83,7 +85,7 @@ class OpenAIGPT(GPT):
                     transcript=transcript,
                     filename=filename,
                     screenshot=screenshot,
-                    note_style=note_style,
+                    style_instruction=style_instruction,
                     system_content=system_content,
                     progress_callback=progress_callback,
                 )
@@ -106,7 +108,7 @@ class OpenAIGPT(GPT):
                             transcript=transcript,
                             filename=filename,
                             screenshot=screenshot,
-                            note_style=note_style,
+                            style_instruction=style_instruction,
                             system_content=system_content,
                             progress_callback=progress_callback,
                         )
@@ -244,7 +246,7 @@ class OpenAIGPT(GPT):
         transcript: TranscriptResult,
         filename: str,
         screenshot: bool,
-        note_style: str,
+        style_instruction: str,
         system_content: str,
         progress_callback: Optional[ProgressCallback] = None,
     ) -> str:
@@ -256,7 +258,14 @@ class OpenAIGPT(GPT):
         for index, chunk in enumerate(chunks, start=1):
             message = f"正在生成第 {index}/{len(chunks)} 段摘要"
             logger.info("Generating intermediate note chunk %s/%s (%s segments)", index, len(chunks), len(chunk))
-            chunk_prompt = self._build_chunk_prompt(chunk, filename, index, len(chunks), screenshot)
+            chunk_prompt = self._build_chunk_prompt(
+                chunk,
+                filename,
+                index,
+                len(chunks),
+                screenshot,
+                style_instruction,
+            )
             chunk_summary = self._complete_markdown(
                 system_content,
                 chunk_prompt,
@@ -273,8 +282,18 @@ class OpenAIGPT(GPT):
             if progress_callback:
                 progress_callback(f"已完成第 {index}/{len(chunks)} 段摘要", "\n\n".join(chunk_summaries))
 
-        merged_summaries = self._compress_summaries_if_needed(chunk_summaries, system_content, progress_callback)
-        final_prompt = self._build_final_prompt(merged_summaries, filename, screenshot, note_style)
+        merged_summaries = self._compress_summaries_if_needed(
+            chunk_summaries,
+            system_content,
+            style_instruction,
+            progress_callback,
+        )
+        final_prompt = self._build_final_prompt(
+            merged_summaries,
+            filename,
+            screenshot,
+            style_instruction,
+        )
         return self._complete_markdown(
             system_content,
             final_prompt,
@@ -305,6 +324,7 @@ class OpenAIGPT(GPT):
         self,
         summaries: List[str],
         system_content: str,
+        style_instruction: str,
         progress_callback: Optional[ProgressCallback] = None,
     ) -> List[str]:
         current = summaries
@@ -317,7 +337,9 @@ class OpenAIGPT(GPT):
                 prompt = (
                     "The following are intermediate Chinese video-note summaries from a long video.\n"
                     "Compress them into a denser Chinese outline while preserving timestamps, facts, examples, "
-                    "names, parameters, and decisions. Do not add a final conclusion yet.\n\n"
+                    "names, parameters, and decisions. Do not add a final conclusion yet.\n"
+                    "Apply these note-style requirements while compressing:\n"
+                    f"{style_instruction}\n\n"
                     f"Group {index}/{len(grouped)}:\n---\n{chr(10).join(group)}\n---"
                 )
                 next_round.append(
@@ -383,6 +405,7 @@ class OpenAIGPT(GPT):
         index: int,
         total: int,
         screenshot: bool,
+        style_instruction: str,
     ) -> str:
         screenshot_instruction = ""
         if screenshot:
@@ -395,6 +418,8 @@ class OpenAIGPT(GPT):
 Write an intermediate Chinese Markdown outline for this part only.
 Preserve exact timestamps, key facts, examples, tool names, parameters, steps, conclusions, and warnings.
 Do not invent information. Do not write the final whole-video summary yet.{screenshot_instruction}
+Apply these note-style requirements while deciding what information to preserve:
+{style_instruction}
 
 File: {filename}
 
@@ -408,7 +433,7 @@ Segments:
         summaries: Sequence[str],
         filename: str,
         screenshot: bool,
-        note_style: str,
+        style_instruction: str,
     ) -> str:
         screenshot_instruction = ""
         if screenshot:
@@ -416,15 +441,6 @@ Segments:
                 "\nKeep or add a small number of useful screenshot markers in the exact format "
                 "`*Screenshot-[mm:ss]`, placed near the relevant section."
             )
-
-        style_instruction = {
-            "detailed": "Use detailed mode: preserve examples, data, parameters, concrete steps, and enough detail to replace rewatching.",
-            "academic": "Use academic mode: formal, objective, structured around background, arguments, evidence, and conclusions.",
-            "creative": "Use creative mode: readable and vivid, but factual, with highlights and takeaways.",
-        }.get(
-            note_style,
-            "Use concise mode: direct key points, short paragraphs, and only the most important concepts and steps.",
-        )
 
         return f"""Create the final Chinese Markdown note for the whole video from these intermediate summaries.
 File: {filename}
@@ -448,7 +464,7 @@ Intermediate summaries:
         transcript: TranscriptResult,
         filename: str,
         screenshot: bool = False,
-        note_style: str = "simple",
+        style_instruction: str = "",
     ) -> str:
         segment_text = self._format_segments(transcript.segments)
 
@@ -461,30 +477,7 @@ Intermediate summaries:
    The exact format must be `*Screenshot-[mm:ss]`, for example `*Screenshot-[01:23]`.
    Put the marker near the related section and separate it from normal text with blank lines."""
 
-        style_instruction = {
-            "detailed": """
-Style: detailed mode.
-- Keep examples, data, parameters, and concrete steps from the video.
-- Explain key concepts deeply enough that the note can replace rewatching.
-- Use clear headings and lists.""",
-            "academic": """
-Style: academic mode.
-- Use formal, objective language.
-- Emphasize causality, argumentation, evidence, and terminology.
-- Organize content as background, core points, evidence, and conclusion.""",
-            "creative": """
-Style: creative mode.
-- Make the note readable and vivid without losing facts.
-- Highlight key moments, insights, and takeaways.
-- Use expressive but still structured headings.""",
-        }.get(
-            note_style,
-            """
-Style: concise mode.
-- Focus on key points and remove redundant filler.
-- Use short paragraphs and bullets.
-- Keep core concepts, conclusions, and steps.""",
-        )
+        style_instruction = style_instruction or self._resolve_style_instruction("simple")
 
         return f"""Generate a structured Chinese Markdown note from the following video transcript.
 File name: {filename}
@@ -514,3 +507,28 @@ Output:
 - End with a section named `AI 总结`.
 
 Start generating the note now:"""
+
+    def _resolve_style_instruction(
+        self,
+        note_style: str,
+        note_style_prompt: Optional[str] = None,
+    ) -> str:
+        if note_style_prompt and note_style_prompt.strip():
+            return note_style_prompt.strip()
+        return {
+            "detailed": (
+                "Keep examples, data, parameters, and concrete steps from the video. "
+                "Explain key concepts deeply enough that the note can replace rewatching."
+            ),
+            "academic": (
+                "Use formal, objective language. Emphasize causality, argumentation, evidence, "
+                "and terminology. Organize content as background, core points, evidence, and conclusion."
+            ),
+            "creative": (
+                "Make the note readable and vivid without losing facts. Highlight key moments, "
+                "insights, and takeaways with expressive but structured headings."
+            ),
+        }.get(
+            note_style,
+            "Focus on key points, remove redundant filler, and use short paragraphs and bullets.",
+        )

@@ -18,6 +18,7 @@ from app.db.video_task_dao import (
 )
 from app.services.note import NoteGenerator
 from app.services.model_settings import load_active_model_config
+from app.services.note_style_settings import apply_note_style_snapshot
 from app.services.note_progress import read_note_progress
 from app.services.web_video import cancel_jobs_for_task
 from app.utils.response import ResponseWrapper as R
@@ -145,10 +146,11 @@ def _retry_task_step(
     if model_config:
         model_config = dict(model_config)
         model_config["_explicit_current_model"] = True
-    if note_style:
-        if model_config is None:
-            model_config = {}
-        model_config["note_style"] = note_style
+    if step == "summarize":
+        try:
+            model_config = _prepare_summary_model_config(task_id, model_config, note_style)
+        except ValueError as exc:
+            return R.error(str(exc), code=400)
 
     run_task_id = task.task_id
     if is_fork:
@@ -199,10 +201,54 @@ def _merge_model_config_with_active(task_config: Optional[dict] = None) -> Optio
     active_config = load_active_model_config() or {}
     if active_config:
         merged = dict(active_config)
-        if task_config and task_config.get("note_style"):
-            merged["note_style"] = task_config.get("note_style")
+        if task_config:
+            for key in ("note_style", "note_style_name", "note_style_prompt"):
+                if task_config.get(key):
+                    merged[key] = task_config[key]
         return merged
     return task_config
+
+
+def _read_task_model_config(task_id: str) -> Optional[dict]:
+    config_file = NOTE_OUTPUT_DIR / f"{task_id}_model_config.json"
+    if not config_file.exists():
+        return None
+    try:
+        import json
+        return json.loads(config_file.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("读取任务模型配置失败: %s", exc)
+        return None
+
+
+def _prepare_summary_model_config(
+    task_id: str,
+    model_config: Optional[dict],
+    note_style: Optional[str],
+) -> Optional[dict]:
+    task_config = _read_task_model_config(task_id)
+    if note_style:
+        merged = dict(task_config or {})
+        merged.update(model_config or {})
+        return apply_note_style_snapshot(
+            merged,
+            note_style,
+            preserve_existing=False,
+        )
+
+    if task_config:
+        merged = dict(task_config)
+        merged.update(model_config or {})
+        for key in ("note_style", "note_style_name", "note_style_prompt"):
+            if task_config.get(key):
+                merged[key] = task_config[key]
+        return merged
+
+    if model_config:
+        for key in ("note_style", "note_style_name", "note_style_prompt"):
+            model_config.pop(key, None)
+        return apply_note_style_snapshot(model_config, preserve_existing=False)
+    return None
 
 
 def _write_task_model_config(task_id: str, model_config: Optional[dict]) -> None:
@@ -245,9 +291,12 @@ def run_note_task_step(task_id: str, video_path: str, filename: str, step: str, 
             _write_task_model_config(task_id, model_config)
 
         note_style = "simple"
+        if step == "summarize":
+            model_config = apply_note_style_snapshot(model_config)
+            _write_task_model_config(task_id, model_config)
         if model_config and "note_style" in model_config:
             note_style = model_config["note_style"]
-            
+
         generator = NoteGenerator(model_config=model_config)
         
         if step == "extract":
@@ -323,7 +372,7 @@ async def upload_video(
     request: Request,
     file: Optional[UploadFile] = File(None),
     screenshot: str = Form("false"),
-    note_style: str = Form("simple"),
+    note_style: str = Form(""),
     existing_file_path: Optional[str] = Form(None),
     background_tasks: BackgroundTasks = BackgroundTasks()
 ):
@@ -345,10 +394,18 @@ async def upload_video(
                 except Exception as e:
                     logger.warning(f"解析模型配置失败: {e}, 将使用默认配置")
         
-        # 将 note_style 合并到 model_config 中
-        if model_config_dict is None:
-            model_config_dict = {}
-        model_config_dict["note_style"] = note_style
+        # Resolve the selected mode now so later edits do not change this task.
+        if model_config_dict:
+            for key in ("note_style", "note_style_name", "note_style_prompt"):
+                model_config_dict.pop(key, None)
+        try:
+            model_config_dict = apply_note_style_snapshot(
+                model_config_dict,
+                note_style or None,
+                preserve_existing=False,
+            )
+        except ValueError as exc:
+            return R.error(str(exc), code=400)
         
         # 检查参数
         if not file and not existing_file_path:
@@ -534,9 +591,7 @@ def confirm_step(task_id: str, request: ConfirmStepRequest, background_tasks: Ba
         if request.modelConfig:
             model_config = dict(request.modelConfig)
             model_config["_explicit_current_model"] = True
-            if request.noteStyle:
-                model_config["note_style"] = request.noteStyle
-        
+
         step = request.step
         expected_statuses = {
             "extract": {"pending"},
@@ -545,6 +600,16 @@ def confirm_step(task_id: str, request: ConfirmStepRequest, background_tasks: Ba
         }
         if step not in expected_statuses or task.status not in expected_statuses[step]:
             return R.error("当前步骤不可执行")
+
+        if step == "summarize":
+            try:
+                model_config = _prepare_summary_model_config(
+                    task_id,
+                    model_config,
+                    request.noteStyle,
+                )
+            except ValueError as exc:
+                return R.error(str(exc), code=400)
 
         if step == "summarize":
             transcript_file = NOTE_OUTPUT_DIR / f"{task_id}_transcript.json"

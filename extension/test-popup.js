@@ -45,6 +45,11 @@ function createElement(id) {
       }
     }
   });
+  Object.defineProperty(element, "options", {
+    get() {
+      return this.children;
+    }
+  });
   return element;
 }
 
@@ -55,6 +60,7 @@ function runPopupTest({
   cookiesChecked = true,
   cookieProvider = null,
   backgroundSelection = null,
+  noteStylesResponse = null,
   jobResponse = { status: "completed", progress: 100 }
 }) {
   const elements = {};
@@ -63,12 +69,11 @@ function runPopupTest({
   }
   elements.cookies.checked = cookiesChecked !== false;
   elements.autoRun.checked = true;
-  elements.noteStyle.options = [
-    { value: "simple" },
-    { value: "detailed" },
-    { value: "academic" },
-    { value: "creative" }
-  ];
+  for (const value of ["simple", "detailed", "academic", "creative"]) {
+    const option = createElement(`style-${value}`);
+    option.value = value;
+    elements.noteStyle.appendChild(option);
+  }
   elements.noteStyle.value = "simple";
 
   const fetchCalls = [];
@@ -154,7 +159,24 @@ function runPopupTest({
         if (!appReady) return { ok: false, status: 503, json: async () => ({}) };
         return { ok: true, status: 200, json: async () => ({ data: { bridgeToken: "token-1" } }) };
       }
-  if (url.endsWith("/extension/videos/resolve")) {
+      if (url.endsWith("/note-styles")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: noteStylesResponse || {
+              default_style_id: "simple",
+              styles: [
+                { id: "simple", name: "简洁模式", enabled: true },
+                { id: "detailed", name: "详细模式", enabled: true },
+                { id: "academic", name: "学术模式", enabled: true },
+                { id: "creative", name: "创意模式", enabled: true }
+              ]
+            }
+          })
+        };
+      }
+      if (url.endsWith("/extension/videos/resolve")) {
         if (resolveResponse instanceof Error) throw resolveResponse;
         const data = Array.isArray(resolveResponse)
           ? { candidates: resolveResponse }
@@ -594,6 +616,36 @@ async function testImportSendsSelectedNoteStyle() {
   assert(body.noteStyle === "academic", "import should send selected note style");
 }
 
+async function testCustomNoteStyleIsLoadedAndSent() {
+  const env = runPopupTest({
+    pageScan: {
+      pageUrl: "https://example.test/watch",
+      pageTitle: "Custom style demo",
+      videoCount: 1,
+      streams: []
+    },
+    resolveResponse: [],
+    noteStylesResponse: {
+      default_style_id: "custom-tutorial",
+      styles: [
+        { id: "simple", name: "简洁模式", enabled: true },
+        { id: "custom-tutorial", name: "教程模式", enabled: true },
+        { id: "disabled", name: "停用模式", enabled: false }
+      ]
+    }
+  });
+
+  await env.context.__initialRefresh;
+  assert(env.elements.noteStyle.value === "custom-tutorial", "app default note style should be selected");
+  assert(env.elements.noteStyle.children.length === 2, "disabled note styles should not be rendered");
+
+  await env.context.importSelected();
+  await flush();
+  const importCall = env.fetchCalls.find((call) => call.url.endsWith("/extension/videos/import"));
+  const body = JSON.parse(importCall.options.body);
+  assert(body.noteStyle === "custom-tutorial", "custom note style should be sent");
+}
+
 async function testFragmentsAreFilteredBeforeResolve() {
   const env = runPopupTest({
     pageScan: {
@@ -749,6 +801,7 @@ async function testCanceledJobStopsPolling() {
   await testImportSendsCandidateUrl();
   await testImportSendsResolvedBilibiliApiCandidate();
   await testImportSendsSelectedNoteStyle();
+  await testCustomNoteStyleIsLoadedAndSent();
   await testFragmentsAreFilteredBeforeResolve();
   await testBilibiliPlayInfoTracksArePreservedBeforeResolve();
   await testSelectedVideoStreamsArePreferred();
