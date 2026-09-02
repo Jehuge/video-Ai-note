@@ -5,6 +5,7 @@ import { useTaskStore } from '../store/taskStore'
 import toast from 'react-hot-toast'
 import FileConfirmDialog from './FileConfirmDialog'
 import { getSelectedModelConfig } from '../utils/modelConfig'
+import { useNoteStyles } from '../hooks/useNoteStyles'
 
 interface VideoFile {
     filename: string
@@ -25,6 +26,7 @@ interface VideoLibraryProps {
 
 export default function VideoLibrary({ onTaskCreated }: VideoLibraryProps) {
     const { addTask } = useTaskStore()
+    const { defaultStyleId, loaded: noteStylesLoaded } = useNoteStyles()
     const [loading, setLoading] = useState(true)
     const [files, setFiles] = useState<VideoFile[]>([])
     const [selectedFile, setSelectedFile] = useState<VideoFile | null>(null)
@@ -58,9 +60,13 @@ export default function VideoLibrary({ onTaskCreated }: VideoLibraryProps) {
 
     const handleConfirm = async (screenshot: boolean) => {
         if (!selectedFile) return
+        if (!noteStylesLoaded) {
+            toast.error('笔记模式仍在加载，请稍后再试')
+            return
+        }
 
         // 此处逻辑复用 UploadZone 的逻辑，但不涉及文件上传
-        const noteStyle = 'simple'
+        const noteStyle = defaultStyleId
 
         const modelConfig = getSelectedModelConfig(noteStyle)
 

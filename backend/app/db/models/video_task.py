@@ -11,6 +11,7 @@ class VideoTask(Base):
     filename = Column(String, nullable=False)
     status = Column(String, nullable=False, default="pending")
     error_message = Column(String, nullable=True)
+    failed_step = Column(String, nullable=True)
     markdown = Column(String, nullable=True)
     screenshot = Column(Integer, default=0)  # 0=False, 1=True
     source = Column(String, nullable=False, default="upload")

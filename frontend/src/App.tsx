@@ -2,6 +2,7 @@ import { useState } from 'react'
 // Sidebar component removed - navigation moved to header
 import MainContent from './components/MainContent'
 import CurrentModelDisplay from './components/CurrentModelDisplay'
+import { NoteStylesProvider } from './hooks/useNoteStyles'
 import { Toaster } from 'react-hot-toast'
 import { Home, Bot, Settings, Download } from 'lucide-react'
 
@@ -80,7 +81,9 @@ function App() {
       <div className="flex-1 flex overflow-hidden">
         {/* 右侧：功能配置和操作区 */}
         <main className="flex-1 overflow-hidden bg-gray-50">
-          <MainContent activeMenu={activeMenu} />
+          <NoteStylesProvider>
+            <MainContent activeMenu={activeMenu} />
+          </NoteStylesProvider>
         </main>
       </div>
       <Toaster position="top-right" />

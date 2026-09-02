@@ -26,6 +26,9 @@ jobs:
           python-version: "3.11"
           cache: pip
 
+      - name: Create backend virtual environment
+        run: python -m venv backend\.venv
+
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
@@ -35,7 +38,7 @@ jobs:
         run: .\scripts\build-windows.ps1 -SkipPlaywright
 
       - name: Run backend tests
-        run: python -m unittest discover backend\tests
+        run: backend\.venv\Scripts\python.exe -m unittest discover backend\tests
 
       - name: Run extension tests
         run: |

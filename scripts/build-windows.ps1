@@ -8,6 +8,7 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $FrontendDir = Join-Path $RepoRoot "frontend"
 $BackendDir = Join-Path $RepoRoot "backend"
+$BackendPython = Join-Path $BackendDir ".venv\Scripts\python.exe"
 $DistPath = Join-Path $BackendDir "dist\VideoNoteAI"
 $ZipPath = Join-Path $BackendDir "dist\VideoNoteAI-win.zip"
 $PyInstallerBuildPath = Join-Path $BackendDir "build\video_note_ai"
@@ -30,6 +31,10 @@ function Remove-GeneratedPath {
 
 Write-Host "Building VideoNoteAI for Windows..." -ForegroundColor Cyan
 
+if (-not (Test-Path -LiteralPath $BackendPython)) {
+    throw "Python virtual environment not found at $BackendPython. Create it with: python -m venv backend\.venv"
+}
+
 if (-not $SkipFrontend) {
     Push-Location $FrontendDir
     try {
@@ -45,16 +50,16 @@ if (-not $SkipFrontend) {
 
 Push-Location $BackendDir
 try {
-    python -m pip install -r requirements.txt
+    & $BackendPython -m pip install -r requirements.txt
     if (-not $SkipPlaywright) {
-        python -m playwright install chromium
+        & $BackendPython -m playwright install chromium
     }
     Remove-GeneratedPath $PyInstallerBuildPath
     Remove-GeneratedPath $DistPath
     if (-not $SkipZip) {
         Remove-GeneratedPath $ZipPath
     }
-    pyinstaller --clean --noconfirm video_note_ai.spec
+    & $BackendPython -m PyInstaller --clean --noconfirm video_note_ai.spec
 }
 finally {
     Pop-Location

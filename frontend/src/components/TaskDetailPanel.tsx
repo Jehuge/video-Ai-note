@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { X, FileVideo, Music, FileText, BookOpen } from 'lucide-react'
 import { useTaskStore } from '../store/taskStore'
-import { getTaskStatus, confirmStep, regenerateNote } from '../services/api'
+import { getTaskStatus, confirmStep, retryTaskStep } from '../services/api'
 import StepProgress, { StepStatus } from './StepProgress'
 import TranscriptViewer from './TranscriptViewer'
 import EnhancedMarkdownViewer from './EnhancedMarkdownViewer'
@@ -45,14 +45,16 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
         id: 'extract',
         name: '提取音频',
         description: '从视频文件中提取音频（如果是视频）',
-        status: (task.status === 'pending'
-          ? 'waiting_confirm'
-          : ['processing', 'transcribing', 'transcribed', 'summarizing', 'completed'].includes(task.status)
-            ? 'completed'
-            : 'pending') as StepStatus,
+        status: (task.status === 'extracting'
+          ? 'processing'
+          : task.status === 'pending'
+            ? 'waiting_confirm'
+            : ['processing', 'transcribing', 'transcribed', 'summarizing', 'completed'].includes(task.status)
+              ? 'completed'
+              : 'pending') as StepStatus,
         canConfirm: task.status === 'pending',
         onConfirm: () => handleStepConfirm('extract'),
-        result: task.status !== 'pending' ? (
+        result: ['processing', 'transcribing', 'transcribed', 'summarizing', 'completed'].includes(task.status) ? (
           <div className="flex items-center gap-2 text-sm text-green-600">
             <Music className="w-4 h-4" />
             <span>音频提取完成</span>
@@ -229,12 +231,12 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
         }
 
         // 提取音频步骤
-        if (status === 'processing' && step.id === 'extract') {
+        if (status === 'extracting' && step.id === 'extract') {
           return { ...step, status: 'processing' as StepStatus }
         }
 
-        // 如果状态从 processing 变为其他状态，且提取已完成
-        if (status !== 'pending' && step.id === 'extract' && step.status === 'processing') {
+        // 提取状态结束后，音频已经可供后续步骤使用
+        if (!['pending', 'extracting'].includes(status) && step.id === 'extract' && step.status === 'processing') {
           return {
             ...step,
             status: 'completed' as StepStatus,
@@ -363,9 +365,8 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
                   <button
                     onClick={async () => {
                       try {
-                        await regenerateNote(taskId, regenerateStyle || undefined)
+                        await retryTaskStep(taskId, 'summarize', regenerateStyle || undefined)
                         toast.success('正在重新生成笔记...')
-                        setAutoProcess(true)
                       } catch (error: any) {
                         toast.error(error.response?.data?.msg || '重新生成失败')
                       }
@@ -391,7 +392,7 @@ export default function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProp
                 }
 
                 // 处理中显示加载
-                if (task.status === 'processing' || task.status === 'transcribing' || task.status === 'summarizing') {
+                if (['extracting', 'processing', 'transcribing', 'summarizing'].includes(task.status)) {
                   return (
                     <div className="flex h-full items-center justify-center text-gray-400">
                       <div className="text-center">

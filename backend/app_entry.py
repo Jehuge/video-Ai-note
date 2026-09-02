@@ -1,4 +1,5 @@
 import os
+import signal
 import sys
 import multiprocessing
 
@@ -117,26 +118,111 @@ if os.path.exists(frontend_dist):
 else:
     logger.warning(f"Frontend dist directory not found at {frontend_dist}")
 
+
 class ServerThread(threading.Thread):
     def __init__(self, app, host, port):
         super().__init__()
         self.server = uvicorn.Server(config=uvicorn.Config(
-            app=app, 
-            host=host, 
-            port=port, 
+            app=app,
+            host=host,
+            port=port,
             log_level="info",
             loop="asyncio"
         ))
-    
+
     def run(self):
         self.server.run()
-    
+
     def stop(self):
         self.server.should_exit = True
+
 
 def check_port(host, port):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         return s.connect_ex((host, port)) == 0
+
+
+def process_is_alive(process):
+    """Support both subprocess.Popen and the in-process backend thread."""
+    if hasattr(process, "poll"):
+        return process.poll() is None
+    return process.is_alive()
+
+
+def wait_for_port(host, port, timeout=60, process=None):
+    """Wait until a local service is reachable, failing early if it exits."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if check_port(host, port):
+            return True
+        if process is not None and not process_is_alive(process):
+            return False
+        time.sleep(0.25)
+    return False
+
+
+def start_frontend_dev(frontend_port):
+    """Start the Vite dev server owned by this app_entry process."""
+    frontend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
+    if not os.path.isdir(os.path.join(frontend_dir, "node_modules")):
+        raise RuntimeError(
+            f"Frontend dependencies are missing at {frontend_dir}; run npm install first."
+        )
+
+    npm_command = "npm.cmd" if os.name == "nt" else "npm"
+    popen_options = {
+        "cwd": frontend_dir,
+        "stdin": subprocess.DEVNULL,
+    }
+    if os.name == "nt":
+        popen_options["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    else:
+        popen_options["start_new_session"] = True
+
+    try:
+        return subprocess.Popen(
+            [npm_command, "run", "dev", "--", "--host", "127.0.0.1", "--port", str(frontend_port)],
+            **popen_options,
+        )
+    except FileNotFoundError as error:
+        raise RuntimeError("未找到 npm，请先安装 Node.js 并确保 npm 在 PATH 中") from error
+
+
+def stop_process_tree(process, name):
+    """Stop a child process and all of its descendants."""
+    if process is None or process.poll() is not None:
+        return
+
+    print(f"Stopping {name} (pid={process.pid})...")
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=10,
+            )
+        else:
+            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+    except (OSError, subprocess.SubprocessError) as error:
+        print(f"Failed to stop {name} gracefully: {error}")
+
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            else:
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        except OSError as error:
+            print(f"Failed to force-stop {name}: {error}")
 
 
 def acquire_single_instance_lock(app_port):
@@ -180,52 +266,100 @@ def ensure_window_visible(window, url):
         except Exception as browser_error:
             print(f"Browser fallback failed: {browser_error}")
 
+
 def main():
-    port = int(os.getenv("BACKEND_PORT", 8483))
+    dev_mode = "--dev" in sys.argv or os.getenv("AINOTE_DEV", "").lower() in {
+        "1", "true", "yes"
+    }
+    backend_port = int(os.getenv("BACKEND_PORT", 8483))
+    frontend_port = int(os.getenv("FRONTEND_PORT", 5173))
     host = "127.0.0.1"
     server_thread = None
-    
-    url = f"http://localhost:{port}"
-    print(f"Starting server at {url}")
+    frontend_process = None
+    exit_code = 0
 
-    if not acquire_single_instance_lock(port):
+    if dev_mode:
+        print(f"Starting frontend dev server at http://{host}:{frontend_port}")
+    else:
+        print(f"Starting server at http://localhost:{backend_port}")
+
+    if not acquire_single_instance_lock(backend_port):
         print("Another Video Note AI instance is already running; exiting.")
         sys.exit(0)
-    
-    # 启动服务器线程
-    if check_port(host, port):
-        print(f"Existing Video Note AI server detected at {url}")
-    else:
-        server_thread = ServerThread(app, host, port)
-        server_thread.start()
-        threading.Thread(target=ensure_playwright_chromium, daemon=True).start()
-    
-    # 等待服务器启动
-    # 虽然 pywebview 会一直加载，但最好确保端口可达
-    # 不过为了响应速度，我们可以直接打开窗口
-    
-    # 创建 PyWebView 窗口
-    window = webview.create_window(
-        title='Video Note AI', 
-        url=url, 
-        width=1280, 
-        height=800,
-        resizable=True,
-        hidden=False,
-        focus=True,
-        on_top=True,
-    )
-    
-    # 启动 GUI 循环
-    # 这会阻塞主线程，直到窗口关闭
-    webview.start(ensure_window_visible, args=(window, url), debug=False)
-    
-    # 窗口关闭后清理
-    print("Stopping server...")
-    if server_thread and server_thread.is_alive():
-        server_thread.stop()
-        server_thread.join(timeout=3)
-    sys.exit(0)
+
+    try:
+        if dev_mode:
+            if check_port(host, frontend_port):
+                raise RuntimeError(f"Frontend port {frontend_port} is already in use")
+
+            frontend_process = start_frontend_dev(frontend_port)
+            if not wait_for_port(host, frontend_port, process=frontend_process):
+                raise RuntimeError("Frontend dev server did not become ready within 60 seconds")
+
+            url = f"http://{host}:{frontend_port}"
+            print(f"Frontend is ready at {url}")
+        else:
+            url = f"http://localhost:{backend_port}"
+
+        if check_port(host, backend_port):
+            if dev_mode:
+                raise RuntimeError(f"Backend port {backend_port} is already in use")
+            print(f"Existing Video Note AI server detected at {url}")
+        else:
+            print(f"Starting backend at http://{host}:{backend_port}")
+            server_thread = ServerThread(app, host, backend_port)
+            server_thread.start()
+            if not wait_for_port(host, backend_port, process=server_thread):
+                raise RuntimeError("Backend server did not become ready within 60 seconds")
+            threading.Thread(target=ensure_playwright_chromium, daemon=True).start()
+
+        if dev_mode:
+            print(f"Opening frontend at {url}")
+            webbrowser.open(url)
+            print("Development services are running; stop this process to shut down the backend.")
+            frontend_process.wait()
+            if frontend_process.returncode not in (0, None):
+                exit_code = frontend_process.returncode
+        else:
+            # pywebview defaults to downloads disabled, which breaks frontend exports.
+            try:
+                webview.settings["ALLOW_DOWNLOADS"] = True
+            except Exception as settings_error:
+                print(f"Failed to enable WebView downloads: {settings_error}")
+
+            window = webview.create_window(
+                title="Video Note AI",
+                url=url,
+                width=1280,
+                height=800,
+                resizable=True,
+                hidden=False,
+                focus=True,
+                on_top=True,
+            )
+
+            # This blocks until the desktop frontend window is closed.
+            webview.start(ensure_window_visible, args=(window, url), debug=False)
+    except KeyboardInterrupt:
+        print("Application interrupted")
+    except Exception as error:
+        exit_code = 1
+        print(f"Application startup failed: {error}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        print("Stopping backend...")
+        if server_thread and server_thread.is_alive():
+            server_thread.stop()
+            server_thread.join(timeout=5)
+            if server_thread.is_alive():
+                print("Backend server did not stop within 5 seconds")
+
+        if dev_mode:
+            stop_process_tree(frontend_process, "frontend dev server")
+
+    sys.exit(exit_code)
+
 
 if __name__ == "__main__":
     main()

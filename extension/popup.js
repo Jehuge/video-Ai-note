@@ -78,6 +78,32 @@ async function saveNoteStyle() {
   await chrome.storage.local.set({ [NOTE_STYLE_STORAGE_KEY]: els.noteStyle.value || "simple" });
 }
 
+async function loadNoteStyles() {
+  if (!els.noteStyle) return;
+  try {
+    const response = await appFetch("/note-styles");
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const json = await response.json();
+    if (json.code && json.code !== 200) throw new Error(json.msg || "加载笔记模式失败");
+    const settings = json.data || {};
+    const styles = (settings.styles || []).filter((style) => style.enabled);
+    if (!styles.length) return;
+
+    els.noteStyle.innerHTML = "";
+    for (const style of styles) {
+      const option = document.createElement("option");
+      option.value = style.id;
+      option.textContent = `${style.name}${style.id === settings.default_style_id ? " (默认)" : ""}`;
+      els.noteStyle.appendChild(option);
+    }
+    els.noteStyle.value = styles.some((style) => style.id === settings.default_style_id)
+      ? settings.default_style_id
+      : styles[0].id;
+  } catch (error) {
+    console.warn("Failed to load note styles; using built-in options", error);
+  }
+}
+
 function cookieProbeUrls(pageUrl) {
   const urls = [];
   try {
@@ -610,6 +636,7 @@ async function importSelected() {
   });
   if (!response.ok) throw new Error(`Import failed: HTTP ${response.status}`);
   const json = await response.json();
+  if (json.code && json.code !== 200) throw new Error(json.msg || "创建任务失败");
   pollJob(json.data.jobId);
 }
 
@@ -653,8 +680,9 @@ function pollJob(jobId) {
 async function refresh() {
   els.send.disabled = true;
   setStatus("正在扫描页面...");
-  await restoreNoteStyle();
   const appReady = await checkApp();
+  if (appReady) await loadNoteStyles();
+  await restoreNoteStyle();
   await collectPageStreams();
   const selectedFallback = selectedVideoCandidate();
   const fallback = selectedFallback || pageResolverCandidate();

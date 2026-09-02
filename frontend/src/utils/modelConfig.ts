@@ -79,7 +79,7 @@ function splitSelectedModel(selectedModel: string) {
   return null
 }
 
-export function getSelectedModelConfig(noteStyle: string = 'simple'): SelectedModelConfig | null {
+export function getSelectedModelConfig(noteStyle?: string): SelectedModelConfig | null {
   const selectedModel = localStorage.getItem('selectedModel')
   if (!selectedModel) return null
 
@@ -103,7 +103,7 @@ export function getSelectedModelConfig(noteStyle: string = 'simple'): SelectedMo
     api_key: instance.apiKey || '',
     base_url: instance.baseUrl || '',
     model: parsed.modelId,
-    note_style: noteStyle,
+    ...(noteStyle ? { note_style: noteStyle } : {}),
   }
 }
 

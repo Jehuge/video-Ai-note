@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.services.extension_bridge import get_bridge_token, verify_bridge_token
+from app.services.note_style_settings import apply_note_style_snapshot
 from app.services.web_video import job_manager, resolve_web_video, start_import_job, sync_job_with_task
 from app.utils.app_paths import get_app_data_dir
 from app.utils.response import ResponseWrapper as R
@@ -56,7 +57,7 @@ class ImportRequest(ResolveRequest):
     candidateUrl: Optional[str] = None
     formatId: Optional[str] = None
     resolvedCandidates: List[Dict[str, Any]] = Field(default_factory=list)
-    noteStyle: Optional[str] = "simple"
+    noteStyle: Optional[str] = None
     autoRun: bool = True
     screenshot: bool = False
 
@@ -90,7 +91,16 @@ async def resolve_videos(payload: ResolveRequest, _: None = Depends(verify_bridg
 
 @router.post("/extension/videos/import")
 async def import_video(payload: ImportRequest, _: None = Depends(verify_bridge_token)):
-    job = start_import_job(payload.model_dump())
+    try:
+        style_snapshot = apply_note_style_snapshot({}, payload.noteStyle, preserve_existing=False)
+    except ValueError as exc:
+        return R.error(str(exc), code=400)
+    job_payload = payload.model_dump()
+    job_payload["noteStyleSnapshot"] = {
+        key: style_snapshot[key]
+        for key in ("note_style", "note_style_name", "note_style_prompt")
+    }
+    job = start_import_job(job_payload)
     return R.success({
         "jobId": job.job_id,
         "status": job.status,

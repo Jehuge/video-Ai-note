@@ -4,7 +4,7 @@ import TaskSteps from './TaskSteps'
 import ModelConfig from './ModelConfig'
 import UploadZone from './UploadZone'
 import BiliDownload from '../pages/BiliDownload'
-import TranscriberSettings from './TranscriberSettings'
+import SettingsPage from './SettingsPage'
 
 interface MainContentProps {
   activeMenu: 'home' | 'upload' | 'model' | 'settings' | 'bili'
@@ -24,7 +24,7 @@ export default function MainContent({ activeMenu }: MainContentProps) {
 
 
   if (activeMenu === 'settings') {
-    return <TranscriberSettings />
+    return <SettingsPage />
   }
 
   // 首页：任务列表 + 步骤
@@ -56,7 +56,7 @@ export default function MainContent({ activeMenu }: MainContentProps) {
 
           <div className="flex-1 overflow-y-auto p-6">
             {currentTaskId ? (
-              <TaskSteps taskId={currentTaskId} />
+              <TaskSteps key={currentTaskId} taskId={currentTaskId} />
             ) : (
               <div className="h-full flex flex-col items-center justify-center text-gray-400">
                 <p>请选择一个任务查看详情，或上传新文件</p>

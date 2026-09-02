@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from app.db.video_task_dao import create_task, get_task_by_id, update_task_status
 from app.services.model_settings import load_active_model_config
 from app.services.note import NoteGenerator
+from app.services.note_style_settings import apply_note_style_snapshot
 from app.services.note_progress import read_note_progress
 from app.utils.ffmpeg_helper import get_ffmpeg_path
 from app.utils.logger import get_logger
@@ -39,10 +40,10 @@ DEFAULT_BROWSER_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
 }
-NOTE_STYLES = {"simple", "detailed", "academic", "creative"}
 TERMINAL_JOB_STATUSES = {"completed", "failed", "canceled", "cancelled"}
 TASK_STATUS_TO_JOB = {
     "pending": ("imported", 92, "Waiting in AInote"),
+    "extracting": ("running_note", 96, "Extracting audio"),
     "processing": ("running_note", 96, "Extracting audio"),
     "transcribing": ("running_note", 97, "Transcribing audio"),
     "transcribed": ("running_note", 98, "Waiting to summarize"),
@@ -1408,25 +1409,40 @@ def _download_direct_url(url: str, target_path: Path, headers: Dict[str, str], j
     import requests
 
     job_manager.update(job_id, status="downloading", progress=8, message=label)
-    with requests.get(url, headers=headers, stream=True, timeout=30) as response:
-        response.raise_for_status()
-        total = int(response.headers.get("content-length") or 0)
-        downloaded = 0
-        with target_path.open("wb") as handle:
-            for chunk in response.iter_content(chunk_size=1024 * 512):
-                if not chunk:
-                    continue
-                handle.write(chunk)
-                downloaded += len(chunk)
-                if total:
-                    progress = 8 + int(downloaded * 35 / total)
-                    job_manager.update(
-                        job_id,
-                        status="downloading",
-                        progress=max(8, min(progress, 45)),
-                        message=label,
-                    )
-    return target_path
+    request_headers = dict(headers or {})
+    request_headers.setdefault("Accept-Encoding", "identity")
+    partial_path = target_path.with_suffix(target_path.suffix + ".part")
+    last_error = None
+    for attempt in range(3):
+        try:
+            with requests.get(url, headers=request_headers, stream=True, timeout=(15, 120)) as response:
+                response.raise_for_status()
+                total = int(response.headers.get("content-length") or 0)
+                downloaded = 0
+                with partial_path.open("wb") as handle:
+                    for chunk in response.iter_content(chunk_size=1024 * 512):
+                        if not chunk:
+                            continue
+                        handle.write(chunk)
+                        downloaded += len(chunk)
+                        if total:
+                            progress = 8 + int(downloaded * 35 / total)
+                            job_manager.update(
+                                job_id,
+                                status="downloading",
+                                progress=max(8, min(progress, 45)),
+                                message=label,
+                            )
+                if total and downloaded != total:
+                    raise IOError(f"下载不完整: expected {total} bytes, received {downloaded}")
+            partial_path.replace(target_path)
+            return target_path
+        except Exception as exc:
+            last_error = exc
+            partial_path.unlink(missing_ok=True)
+            if attempt < 2:
+                time.sleep(1 + attempt)
+    raise RuntimeError(f"下载媒体失败: {last_error}") from last_error
 
 
 def _download_selected_direct_media(job_id: str, payload: Dict[str, Any], suffix: str = ".mp4") -> Path:
@@ -1437,8 +1453,9 @@ def _download_selected_direct_media(job_id: str, payload: Dict[str, Any], suffix
 
     headers = dict(DEFAULT_BROWSER_HEADERS)
     headers.update({k: v for k, v in (payload.get("headers") or {}).items() if v and k.lower() not in {"cookie", "set-cookie"}})
-    if payload.get("cookies"):
-        headers["Cookie"] = payload.get("cookies")
+    cookie = payload.get("cookies") or payload.get("cookie")
+    if cookie:
+        headers["Cookie"] = cookie
     if payload.get("pageUrl") or payload.get("page_url"):
         headers["Referer"] = payload.get("pageUrl") or payload.get("page_url")
 
@@ -1498,8 +1515,9 @@ def _download_bilibili_playinfo(job_id: str, payload: Dict[str, Any]) -> Path:
 
     headers = dict(DEFAULT_BROWSER_HEADERS)
     headers.update({k: v for k, v in (payload.get("headers") or {}).items() if v and k.lower() not in {"cookie", "set-cookie"}})
-    if payload.get("cookies"):
-        headers["Cookie"] = payload.get("cookies")
+    cookie = payload.get("cookies") or payload.get("cookie")
+    if cookie:
+        headers["Cookie"] = cookie
     if payload.get("pageUrl") or payload.get("page_url"):
         headers["Referer"] = payload.get("pageUrl") or payload.get("page_url")
 
@@ -1536,10 +1554,6 @@ def _write_model_config(task_id: str, model_config: Optional[dict]) -> None:
     config_file.write_text(json.dumps(model_config, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _payload_note_style(payload: Dict[str, Any], default: str = "simple") -> str:
-    style = payload.get("noteStyle") or payload.get("note_style") or default
-    return style if style in NOTE_STYLES else default
-
 
 def _run_import_job(job_id: str, payload: Dict[str, Any]) -> None:
     downloaded_path: Optional[Path] = None
@@ -1568,8 +1582,20 @@ def _run_import_job(job_id: str, payload: Dict[str, Any]) -> None:
         )
 
         model_config = load_active_model_config() or {}
-        note_style = _payload_note_style(payload, model_config.get("note_style", "simple"))
-        model_config["note_style"] = note_style
+        style_snapshot = payload.get("noteStyleSnapshot") or {}
+        if style_snapshot:
+            model_config.update(style_snapshot)
+        else:
+            requested_style = payload.get("noteStyle") or payload.get("note_style")
+            if not requested_style:
+                for key in ("note_style", "note_style_name", "note_style_prompt"):
+                    model_config.pop(key, None)
+            model_config = apply_note_style_snapshot(
+                model_config,
+                requested_style,
+                preserve_existing=False,
+            )
+        note_style = model_config["note_style"]
         _write_model_config(task_id, model_config)
         job_manager.update(job_id, task_id=task_id, filename=filename, progress=95)
 
@@ -1589,7 +1615,22 @@ def _run_import_job(job_id: str, payload: Dict[str, Any]) -> None:
         current = job_manager.get(job_id)
         if current and current.task_id:
             try:
-                update_task_status(current.task_id, "failed", error_message=str(exc))
+                task = get_task_by_id(current.task_id)
+                failed_step = getattr(task, "failed_step", None)
+                if failed_step not in {"extract", "transcribe", "summarize"}:
+                    failed_step = {
+                        "extracting": "extract",
+                        "processing": "extract",
+                        "transcribing": "transcribe",
+                        "transcribed": "summarize",
+                        "summarizing": "summarize",
+                    }.get(getattr(task, "status", None), "extract")
+                update_task_status(
+                    current.task_id,
+                    "failed",
+                    error_message=str(exc),
+                    failed_step=failed_step,
+                )
             except Exception:
                 pass
         job_manager.update(job_id, status="failed", error=str(exc), message="Import failed")

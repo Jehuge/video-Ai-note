@@ -143,6 +143,57 @@ class OpenAIGPTTests(unittest.TestCase):
         self.assertEqual(markdown, "# Final note")
         self.assertEqual(fake_client.chat.completions.create.call_count, 5)
 
+    def test_custom_style_prompt_reaches_every_chunk_and_final_merge(self):
+        fake_client = mock.Mock()
+        fake_client.chat.completions.create.side_effect = [
+            [_chunk("chunk one")],
+            [_chunk("chunk two")],
+            [_chunk("chunk three")],
+            [_chunk("# Final note")],
+        ]
+
+        with mock.patch("app.gpt.openai_gpt.create_openai_client", return_value=fake_client):
+            gpt = OpenAIGPT(api_key="sk-test", base_url="https://example.test/v1", model="demo")
+
+        segments = [
+            TranscriptSegment(start=i * 2, end=i * 2 + 1, text="x" * 500)
+            for i in range(60)
+        ]
+        transcript = TranscriptResult(language="zh", full_text=" ".join(seg.text for seg in segments), segments=segments)
+        custom_prompt = "CUSTOM_STYLE_REQUIREMENT: preserve every command and parameter."
+
+        with mock.patch("app.gpt.openai_gpt.NOTE_GENERATION_MODE", "chunk"):
+            gpt.summarize(
+                transcript,
+                filename="long.mp4",
+                note_style="custom-tutorial",
+                note_style_prompt=custom_prompt,
+            )
+
+        self.assertEqual(fake_client.chat.completions.create.call_count, 4)
+        for call in fake_client.chat.completions.create.call_args_list:
+            user_prompt = call.kwargs["messages"][1]["content"]
+            self.assertIn(custom_prompt, user_prompt)
+
+    def test_custom_style_prompt_reaches_summary_compression(self):
+        fake_client = mock.Mock()
+        fake_client.chat.completions.create.return_value = [_chunk("compressed")]
+
+        with mock.patch("app.gpt.openai_gpt.create_openai_client", return_value=fake_client):
+            gpt = OpenAIGPT(api_key="sk-test", base_url="https://example.test/v1", model="demo")
+
+        custom_prompt = "CUSTOM_STYLE_REQUIREMENT: preserve every command and parameter."
+        with mock.patch("app.gpt.openai_gpt.MAX_DIRECT_PROMPT_CHARS", 10):
+            gpt._compress_summaries_if_needed(
+                ["a" * 20, "b" * 20],
+                "system",
+                custom_prompt,
+                progress_callback=None,
+            )
+
+        user_prompt = fake_client.chat.completions.create.call_args.kwargs["messages"][1]["content"]
+        self.assertIn(custom_prompt, user_prompt)
+
 
 def _chunk(content):
     return mock.Mock(choices=[mock.Mock(delta=mock.Mock(content=content))])

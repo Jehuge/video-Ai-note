@@ -38,6 +38,7 @@ def migrate_add_screenshot_column():
     migrations = [
         ("screenshot", "ALTER TABLE video_tasks ADD COLUMN screenshot INTEGER DEFAULT 0"),
         ("error_message", "ALTER TABLE video_tasks ADD COLUMN error_message TEXT"),
+        ("failed_step", "ALTER TABLE video_tasks ADD COLUMN failed_step TEXT"),
         ("source", "ALTER TABLE video_tasks ADD COLUMN source TEXT NOT NULL DEFAULT 'upload'"),
         ("source_url", "ALTER TABLE video_tasks ADD COLUMN source_url TEXT"),
     ]

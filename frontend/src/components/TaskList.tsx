@@ -8,6 +8,7 @@ const statusIcons = {
   completed: <CheckCircle2 className="w-4 h-4 text-green-500" />,
   failed: <AlertCircle className="w-4 h-4 text-red-500" />,
   pending: <Clock className="w-4 h-4 text-amber-500" />,
+  extracting: <Loader2 className="w-4 h-4 animate-spin text-blue-500" />,
   processing: <Loader2 className="w-4 h-4 animate-spin text-blue-500" />,
   transcribing: <Loader2 className="w-4 h-4 animate-spin text-blue-500" />,
   transcribed: <CheckCircle2 className="w-4 h-4 text-emerald-500" />,
@@ -38,6 +39,7 @@ export default function TaskList() {
             filename: task.filename,
             status: task.status,
             errorMessage: task.error_message,
+            failedStep: task.failed_step,
             source: task.source,
             sourceUrl: task.source_url,
             markdown: task.markdown,
@@ -151,6 +153,7 @@ export default function TaskList() {
                           task.status === 'completed' ? '已完成' :
                             task.status === 'failed' ? '处理失败' :
                               task.status === 'pending' ? '等待处理' :
+                                task.status === 'extracting' ? '提取中...' :
                                 task.status === 'processing' ? '处理中...' :
                                   task.status === 'transcribing' ? '转写中...' :
                                     task.status === 'transcribed' ? '转写完成' :

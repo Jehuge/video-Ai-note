@@ -6,6 +6,7 @@ import toast from 'react-hot-toast'
 import FileConfirmDialog from './FileConfirmDialog'
 import VideoLibrary from './VideoLibrary'
 import { getSelectedModelConfig } from '../utils/modelConfig'
+import { useNoteStyles } from '../hooks/useNoteStyles'
 
 interface UploadZoneProps {
     onUploadSuccess?: (taskId: string) => void
@@ -13,6 +14,7 @@ interface UploadZoneProps {
 
 export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
     const { addTask } = useTaskStore()
+    const { defaultStyleId, loaded: noteStylesLoaded } = useNoteStyles()
     const [mode, setMode] = useState<'upload' | 'library'>('upload')
 
     const [uploading, setUploading] = useState(false)
@@ -70,9 +72,13 @@ export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
     }
 
     const handleConfirmUpload = async (screenshot: boolean) => {
-        const noteStyle = 'simple'
         if (!selectedFile) return
+        if (!noteStylesLoaded) {
+            toast.error('笔记模式仍在加载，请稍后再试')
+            return
+        }
 
+        const noteStyle = defaultStyleId
         const modelConfig = getSelectedModelConfig(noteStyle)
 
         setShowConfirm(false)

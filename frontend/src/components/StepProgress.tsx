@@ -117,6 +117,11 @@ export default function StepProgress({ steps, currentStep }: StepProgressProps) 
                           已完成
                         </span>
                       )}
+                      {step.status === 'failed' && (
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-600 ring-1 ring-red-600/10">
+                          失败，可重试
+                        </span>
+                      )}
                     </div>
                   </div>
 
@@ -134,10 +139,10 @@ export default function StepProgress({ steps, currentStep }: StepProgressProps) 
                     )}
 
                     {/* Controls Container */}
-                    {(step.status === 'waiting_confirm' || (step.status === 'completed' && step.completedControl)) && (
+                    {(step.status === 'waiting_confirm' || step.status === 'failed' || (step.status === 'completed' && step.completedControl)) && (
                       <div className="pt-2">
                         {/* Waiting Confirmation Controls */}
-                        {step.status === 'waiting_confirm' && (
+                        {(step.status === 'waiting_confirm' || step.status === 'failed') && (
                           step.customControl ? (
                             step.customControl
                           ) : step.canConfirm && step.onConfirm ? (
@@ -149,7 +154,7 @@ export default function StepProgress({ steps, currentStep }: StepProgressProps) 
                               className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-sm font-medium rounded-lg transition-all shadow-sm shadow-blue-600/20 hover:shadow-blue-600/30"
                             >
                               <Play className="w-4 h-4 fill-current" />
-                              开始处理
+                              {step.status === 'failed' ? '重新生成' : '开始处理'}
                             </button>
                           ) : null
                         )}

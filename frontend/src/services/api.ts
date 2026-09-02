@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { getSelectedModelConfig } from '../utils/modelConfig'
+import type { NoteStyleSettings } from '../utils/noteStyles'
 
 // 使用相对路径，通过 Vite 代理访问后端
 // 开发环境：通过 vite.config.ts 中的 proxy 配置代理到 http://localhost:8483
@@ -67,7 +68,9 @@ export const getTasks = async (limit: number = 50) => {
 
 // 确认步骤
 export const confirmStep = async (taskId: string, step: string, noteStyle?: string) => {
-  const modelConfig = step === 'summarize' ? getSelectedModelConfig(noteStyle || 'simple') : null
+  const modelConfig = step === 'summarize' && noteStyle
+    ? getSelectedModelConfig(noteStyle)
+    : null
   return await api.post(`/task/${taskId}/confirm_step`, {
     step,
     modelConfig,
@@ -75,14 +78,15 @@ export const confirmStep = async (taskId: string, step: string, noteStyle?: stri
   })
 }
 
-// 重新生成笔记
-export const regenerateNote = async (taskId: string, noteStyle?: string) => {
-  const modelConfig = getSelectedModelConfig(noteStyle || 'simple')
-
-  // 将模型配置作为请求体传递（使用驼峰命名）
-  return await api.post(`/task/${taskId}/regenerate`, {
-    modelConfig: modelConfig,
-    noteStyle: noteStyle
+// 重跑指定阶段：失败任务续跑，已完成任务由后端自动创建分支
+export const retryTaskStep = async (taskId: string, step: string, noteStyle?: string) => {
+  const modelConfig = step === 'summarize' && noteStyle
+    ? getSelectedModelConfig(noteStyle)
+    : null
+  return await api.post(`/task/${taskId}/retry`, {
+    step,
+    modelConfig,
+    noteStyle,
   })
 }
 
@@ -115,6 +119,18 @@ export const setActiveModelConfig = async (config: {
   note_style?: string
 }) => {
   return await api.post('/models/active', config)
+}
+
+export const resetNoteStyleSettings = async () => {
+  return await api.post('/note-styles/reset')
+}
+
+export const getNoteStyleSettings = async () => {
+  return await api.get('/note-styles')
+}
+
+export const saveNoteStyleSettings = async (settings: NoteStyleSettings) => {
+  return await api.put('/note-styles', settings)
 }
 
 export const getTranscriberConfig = async () => {

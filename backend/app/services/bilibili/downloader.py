@@ -263,7 +263,11 @@ class BilibiliDownloader:
         """保存视频到本地"""
         # 创建下载目录
         download_path = self.api_config.get('download_path', 'uploads') if self.api_config else 'uploads'
-        download_dir = pathlib.Path(download_path)
+        # 打包版通过 UPLOAD_DIR 指向用户数据目录；相对的默认 uploads 不应落到 EXE 工作目录。
+        if not download_path or download_path == "uploads":
+            download_dir = pathlib.Path(os.getenv("UPLOAD_DIR", "uploads"))
+        else:
+            download_dir = pathlib.Path(download_path).expanduser()
         download_dir.mkdir(parents=True, exist_ok=True)
         
         # 清理文件名中的非法字符

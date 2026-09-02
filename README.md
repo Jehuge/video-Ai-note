@@ -13,7 +13,7 @@ Video Note AI 是一个本地运行的视频笔记应用。它可以上传本地
 - 网页视频笔记：Chrome/Edge 插件检测当前页面视频，选择清晰度后交给本机 App 下载和生成笔记。
 - 视频框选择器：插件支持点击“选视频”，在页面上手动框选目标视频区域，适合多视频或复杂页面。
 - 真实清晰度解析：后端使用 `yt-dlp` 解析页面 URL、HLS、DASH 和直接媒体 URL，插件展示后端返回的真实格式。
-- 笔记模式选择：插件可选择简洁、详细、学术、创意四种笔记模式，模型和提示词细节仍由 App 端配置管理。
+- 笔记模式选择：插件可选择内置或自定义笔记模式，模式名称和提示词细节由 App 端配置管理。
 - 语音识别配置：App 端保留本地 `faster-whisper` 转写设置，支持模型、设备、精度等参数配置。
 - AI 模型配置：支持 OpenAI 兼容 API 的模型提供商配置，适配 OpenAI、DeepSeek、通义、硅基流动、LM Studio、Ollama 等兼容服务。
 - B 站下载：保留原有 Bilibili 下载和任务管理能力。
@@ -37,39 +37,49 @@ Video Note AI 是一个本地运行的视频笔记应用。它可以上传本地
 - Chrome 或 Edge
 - Windows 10/11 或 macOS 12+
 
-### 启动后端
+### 启动开发环境
+
+开发模式使用 `backend/app_entry.py` 作为唯一入口：它会先启动 Vite 前端，等待前端就绪后启动 FastAPI 后端；关闭开发入口进程时会同时停止两个服务。
+
+Windows:
+
+```powershell
+python -m venv backend\.venv
+backend\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+backend\.venv\Scripts\python.exe -m playwright install chromium
+cd frontend
+npm install
+cd ..
+.\start-dev.bat
+```
+
+macOS/Linux:
+
+```bash
+python3 -m venv backend/.venv
+backend/.venv/bin/python -m pip install -r backend/requirements.txt
+backend/.venv/bin/python -m playwright install chromium
+cd frontend
+npm install
+cd ..
+backend/.venv/bin/python backend/app_entry.py --dev
+```
+
+开发模式前端运行在 `http://127.0.0.1:5173`，后端默认监听 `http://127.0.0.1:8483`。
+
+如只需要单独启动后端 API，仍可执行：
 
 ```powershell
 cd backend
-python -m venv venv
-.\venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-playwright install chromium
-python main.py
+.venv\Scripts\python.exe main.py
 ```
 
 macOS/Linux:
 
 ```bash
 cd backend
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-playwright install chromium
-python main.py
+.venv/bin/python main.py
 ```
-
-后端默认监听 `http://127.0.0.1:8483`。
-
-### 启动前端
-
-```powershell
-cd frontend
-npm install
-npm run dev
-```
-
-开发模式前端通常运行在 `http://127.0.0.1:5173` 或 Vite 输出的端口。
 
 ### 加载浏览器插件
 
@@ -88,6 +98,7 @@ npm run dev
 ### Windows
 
 ```powershell
+python -m venv backend\.venv
 .\scripts\build-windows.ps1
 ```
 

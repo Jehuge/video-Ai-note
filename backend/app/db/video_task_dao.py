@@ -11,7 +11,8 @@ def create_task(
     filename: str,
     screenshot: bool = False,
     source: str = "upload",
-    source_url: str = None
+    source_url: str = None,
+    status: str = "pending",
 ) -> VideoTask:
     """创建新任务"""
     db = SessionLocal()
@@ -19,7 +20,7 @@ def create_task(
         task = VideoTask(
             task_id=task_id,
             filename=filename,
-            status="pending",
+            status=status,
             screenshot=1 if screenshot else 0,
             source=source,
             source_url=source_url,
@@ -49,7 +50,13 @@ def get_task_by_id(task_id: str) -> VideoTask:
         db.close()
 
 
-def update_task_status(task_id: str, status: str, markdown: str = None, error_message: str = None):
+def update_task_status(
+    task_id: str,
+    status: str,
+    markdown: str = None,
+    error_message: str = None,
+    failed_step: str = None,
+):
     """更新任务状态"""
     db = SessionLocal()
     try:
@@ -60,8 +67,10 @@ def update_task_status(task_id: str, status: str, markdown: str = None, error_me
                 task.markdown = markdown
             if status == "failed" and error_message:
                 task.error_message = error_message
+                task.failed_step = failed_step
             elif status != "failed":
                 task.error_message = None
+                task.failed_step = None
             db.commit()
             db.refresh(task)
             return task
@@ -69,6 +78,35 @@ def update_task_status(task_id: str, status: str, markdown: str = None, error_me
     except Exception as e:
         db.rollback()
         logger.error(f"更新任务状态失败: {e}")
+        raise
+    finally:
+        db.close()
+
+
+def transition_task_status(task_id: str, expected_statuses, status: str) -> bool:
+    """仅当任务仍处于预期状态时，原子切换到新状态。"""
+    db = SessionLocal()
+    try:
+        updated = (
+            db.query(VideoTask)
+            .filter(
+                VideoTask.task_id == task_id,
+                VideoTask.status.in_(tuple(expected_statuses)),
+            )
+            .update(
+                {
+                    VideoTask.status: status,
+                    VideoTask.error_message: None,
+                    VideoTask.failed_step: None,
+                },
+                synchronize_session=False,
+            )
+        )
+        db.commit()
+        return updated == 1
+    except Exception as e:
+        db.rollback()
+        logger.error(f"切换任务状态失败: {e}")
         raise
     finally:
         db.close()
