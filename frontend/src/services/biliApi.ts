@@ -42,8 +42,8 @@ export const getBiliVideos = async (): Promise<BiliVideo[]> => {
     return response.data.data || []
 }
 
-export const addBiliVideo = async (url: string) => {
-    const response = await api.post('/bili/videos', { url })
+export const addBiliVideo = async (url: string, allPages = false) => {
+    const response = await api.post('/bili/videos', { url, all_pages: allPages })
     return response.data
 }
 

@@ -2,17 +2,232 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+:root {
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei",
+    "Noto Sans SC", sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, "Courier New",
     monospace;
 }
 
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: #0f172a;
+  background: #f8fafc;
+}
+
+/* 中文正文与标题：更紧凑的字距与更好的换行 */
+h1, h2, h3, h4 {
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+code, pre, .font-mono {
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+}
+
+/* 数据用等宽数字，避免跳动 */
+table, .tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 统一的焦点态：键盘可访问性 */
+:focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+::selection {
+  background: #bfdbfe;
+  color: #1e3a8a;
+}
+
+/* 细滚动条：与界面融为一体 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+  background-clip: content-box;
+}
+
+/* ==================== 笔记正文排版（.note-md） ==================== */
+/* 移植自用户个人网站 personalWeb 的 .markdown-content 渲染风格 */
+
+.note-md {
+  color: #374151;
+}
+.note-md > * + * {
+  margin-top: 1.5em;
+}
+/* 块级增量渲染容器（流式预览）：每块包一层 .note-md-block div，
+   抵消块 div 之间的 margin，让内部元素的外边距穿透 div 折叠，
+   垂直间距与整篇渲染保持一致 */
+.note-md-blocks > * + * {
+  margin-top: 0;
+}
+
+.note-md h1, .note-md h2, .note-md h3, .note-md h4, .note-md h5, .note-md h6 {
+  color: #111827;
+  font-weight: 700;
+  line-height: 1.3;
+  margin-top: 2em;
+  margin-bottom: 0.6em;
+  letter-spacing: -0.025em;
+}
+.note-md h1 { font-size: 2.25rem; margin-top: 0; }
+.note-md h2 {
+  font-size: 1.75rem;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid #e5e7eb;
+}
+.note-md h3 { font-size: 1.5rem; }
+.note-md h4 { font-size: 1.25rem; }
+.note-md h1:first-child, .note-md h2:first-child, .note-md h3:first-child { margin-top: 0; }
+
+.note-md p { line-height: 1.8; }
+
+.note-md ul { list-style-type: disc; padding-left: 1.625em; }
+.note-md ol { list-style-type: decimal; padding-left: 1.625em; }
+.note-md li { margin-top: 0.5em; margin-bottom: 0.5em; padding-left: 0.375em; }
+.note-md li::marker { color: #6b7280; }
+
+.note-md blockquote {
+  font-weight: 500;
+  font-style: italic;
+  color: #4b5563;
+  border-left: 4px solid #e5e7eb;
+  padding: 1rem;
+  padding-left: 1rem;
+  margin-left: 0;
+  margin-right: 0;
+  background: linear-gradient(to right, rgba(243, 244, 246, 0.5), transparent);
+  border-radius: 0 0.5rem 0.5rem 0;
+}
+.note-md blockquote p { margin: 0.2em 0; line-height: 1.7; }
+
+.note-md code {
+  color: #111827;
+  font-weight: 600;
+  font-size: 0.875em;
+  background-color: #f3f4f6;
+  padding: 0.2em 0.4em;
+  border-radius: 0.375rem;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+}
+
+.note-md pre {
+  background-color: #f3f4f6;
+  color: #1f2937;
+  overflow-x: auto;
+  padding: 1.25rem;
+  border-radius: 0.75rem;
+  margin: 1.5em 0;
+  border: 1px solid #e5e7eb;
+}
+.note-md pre code {
+  background-color: transparent;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font-size: 0.9em;
+  font-weight: 500;
+}
+
+.note-md a {
+  color: #3b82f6;
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: all 0.2s;
+}
+.note-md a:hover { border-bottom-color: currentColor; }
+
+.note-md img {
+  border-radius: 0.75rem;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  margin: 2em auto;
+  display: block;
+  max-width: 100%;
+}
+
+.note-md table {
+  width: 100%;
+  table-layout: auto;
+  text-align: left;
+  margin: 2em 0;
+  font-size: 0.875em;
+  line-height: 1.7;
+  border-collapse: collapse;
+  display: table;
+  overflow-x: visible;
+}
+.note-md thead { border-bottom: 1px solid #e5e7eb; }
+.note-md th {
+  color: #111827;
+  font-weight: 600;
+  padding: 0.5714286em;
+  background: transparent;
+  white-space: normal;
+}
+.note-md td {
+  padding: 0.5714286em;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+/* 深色模式（与个人网站一致） */
+.dark .note-md { color: #d1d5db; }
+.dark .note-md h2 { border-color: rgba(148, 163, 184, 0.2); }
+.dark .note-md h1, .dark .note-md h2, .dark .note-md h3, .dark .note-md h4, .dark .note-md h5, .dark .note-md h6 { color: #f3f4f6; }
+.dark .note-md li::marker { color: #6b7280; }
+.dark .note-md blockquote {
+  color: #d1d5db;
+  border-left-color: #4b5563;
+  background: linear-gradient(to right, rgba(31, 41, 55, 0.5), transparent);
+}
+.dark .note-md code { color: #e5e7eb; background-color: rgba(55, 65, 81, 0.5); border: 1px solid rgba(75, 85, 99, 0.4); }
+.dark .note-md pre { background-color: #111827; color: #e5e7eb; border-color: #374151; }
+.dark .note-md a { color: #60a5fa; }
+.dark .note-md img { box-shadow: 0 4px 20px -5px rgba(0, 0, 0, 0.5); border: 1px solid rgba(255, 255, 255, 0.1); }
+.dark .note-md thead { border-color: #374151; }
+.dark .note-md th { color: #f3f4f6; }
+.dark .note-md td { border-color: rgba(55, 65, 81, 0.3); }
+
+/* 看题模式：勾选后展开视觉模型输入（checkbox 在 label 内，用 :has 关联面板） */
+.board-panel { display: none; }
+div:has(.board-toggle:checked) > .board-panel { display: block; }
+.board-panel-done { display: none; }
+input.board-toggle-done:checked ~ .board-panel-done { display: block; }
+
+/* KaTeX 公式：防止重叠与溢出；行内公式稍大更易读 */
+.note-md .katex { font-size: 1.12em; line-height: normal; }
+.note-md p { margin: 1em 0; }
+.note-md h3 { margin-top: 1.6em; }
+.note-md .katex-display {
+  margin: 1.2em 0;
+  padding: 6px 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}

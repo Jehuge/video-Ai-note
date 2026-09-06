@@ -53,19 +53,33 @@ class BilibiliSign:
 
 def parse_video_info_from_url(url: str) -> VideoUrlInfo:
     """
-    从 URL 中解析视频ID
-    
+    从 URL 中解析视频ID和分P序号
+
     Args:
         url: B站视频链接或BV号
             - https://www.bilibili.com/video/BV1dwuKzmE26/
+            - https://www.bilibili.com/video/BV147411K7xu/?p=27
             - BV1d54y1g7db
-    
+            - BV1d54y1g7db_p3 (队列条目格式)
+
     Returns:
-        VideoUrlInfo: 包含视频ID的对象
+        VideoUrlInfo: 包含视频ID和分P序号的对象
     """
+    page = 1
+
+    # 如果输入是队列条目格式 "BV号_pN"，拆出分P序号
+    queue_match = re.fullmatch(r"(BV[a-zA-Z0-9]+)_p(\d+)", url)
+    if queue_match:
+        return VideoUrlInfo(video_id=queue_match.group(1), page=int(queue_match.group(2)))
+
+    # 提取 ?p=N 分P参数
+    p_match = re.search(r'[?&]p=(\d+)', url)
+    if p_match:
+        page = max(1, int(p_match.group(1)))
+
     # 如果输入已经是BV号，直接返回
     if url.startswith("BV"):
-        return VideoUrlInfo(video_id=url)
+        return VideoUrlInfo(video_id=url, page=page)
 
     # 使用正则提取BV号
     bv_pattern = r'/video/(BV[a-zA-Z0-9]+)'
@@ -73,6 +87,11 @@ def parse_video_info_from_url(url: str) -> VideoUrlInfo:
 
     if match:
         video_id = match.group(1)
-        return VideoUrlInfo(video_id=video_id)
+        return VideoUrlInfo(video_id=video_id, page=page)
 
     raise ValueError(f"无法从URL解析视频ID: {url}")
+
+
+def make_queue_id(video_id: str, page: int = 1) -> str:
+    """生成视频队列条目ID，多P视频带 _pN 后缀以保证队列内唯一"""
+    return f"{video_id}_p{page}" if page > 1 else video_id

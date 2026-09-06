@@ -2,6 +2,7 @@
 B站视频下载 API 路由
 """
 
+import asyncio
 from datetime import datetime
 from typing import List, Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
@@ -10,7 +11,8 @@ from pydantic import BaseModel
 from app.db import bili_dao
 from app.services.bili_task_manager import task_manager
 from app.services.bili_websocket_manager import connection_manager
-from app.services.bilibili.help import parse_video_info_from_url
+from app.services.bilibili.help import parse_video_info_from_url, make_queue_id
+from app.services.bilibili.client import BilibiliClient
 from app.utils.bili_logger import logger
 
 router = APIRouter()
@@ -41,6 +43,7 @@ class ConfigUpdate(BaseModel):
 class VideoAdd(BaseModel):
     """添加视频模型"""
     url: str
+    all_pages: bool = False  # True 时添加该视频的所有分P
 
 
 class DownloadStart(BaseModel):
@@ -100,25 +103,83 @@ async def get_videos():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+_BILI_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+    "Referer": "https://www.bilibili.com",
+}
+
+
+async def _fetch_video_meta(bv_id: str):
+    """获取视频标题和分P列表，失败时返回空值不阻塞添加"""
+    client = BilibiliClient(headers=_BILI_HEADERS)
+    try:
+        detail = await client.get_video_info(bvid=bv_id)
+        view = detail.get("View", {})
+        return view.get("title") or "", view.get("pages") or []
+    except Exception as e:
+        logger.warning(f"获取视频信息失败 {bv_id}: {e}")
+        return "", []
+
+
+def _compose_title(base_title: str, page_no: int, part_name: str, multi: bool) -> str:
+    if not multi:
+        return base_title
+    return f"{base_title} P{page_no} {part_name or ''}".strip()
+
+
 @router.post("/bili/videos")
 async def add_video(video: VideoAdd):
-    """添加视频"""
+    """添加视频（all_pages=True 时添加所有分P）"""
     try:
         # 解析视频信息
         video_info = parse_video_info_from_url(video.url)
         bv_id = video_info.video_id
-        
-        # 添加到数据库
-        result = bili_dao.create_bili_video(bv_id=bv_id, url=video.url)
-        
-        await connection_manager.send_log("info", f"已添加视频: {bv_id}")
-        
+
+        # 预取标题和分P信息
+        base_title, pages = await _fetch_video_meta(bv_id)
+        multi = len(pages) > 1
+
+        if video.all_pages:
+            if not pages:
+                raise ValueError("未能获取到视频分P信息")
+
+            added, skipped = 0, 0
+            for pg in pages:
+                page_no = pg.get("page", 1)
+                queue_id = make_queue_id(bv_id, page_no)
+                page_url = f"https://www.bilibili.com/video/{bv_id}?p={page_no}"
+                entry_title = _compose_title(base_title, page_no, pg.get("part") or "", multi)
+                try:
+                    bili_dao.create_bili_video(bv_id=queue_id, url=page_url, title=entry_title)
+                    added += 1
+                except ValueError:
+                    # 队列中已存在该分P
+                    skipped += 1
+
+            msg = f"共 {len(pages)} 个分P，新增 {added} 个"
+            if skipped:
+                msg += f"，已存在跳过 {skipped} 个"
+            await connection_manager.send_log("info", f"已添加视频分P: {bv_id}（{msg}）")
+            return {"success": True, "data": {"added": added, "total_pages": len(pages)}, "message": msg}
+
+        queue_id = make_queue_id(bv_id, video_info.page)
+        entry_title = base_title or None
+        if multi:
+            pg = next((p for p in pages if p.get("page") == video_info.page), None)
+            if pg:
+                entry_title = _compose_title(base_title, video_info.page, pg.get("part") or "", True)
+
+        result = bili_dao.create_bili_video(bv_id=queue_id, url=video.url, title=entry_title)
+
+        await connection_manager.send_log("info", f"已添加视频: {queue_id}")
+
         return {
             "success": True,
             "data": {
                 "id": result.id,
                 "bv_id": result.bv_id,
                 "url": result.url,
+                "title": result.title,
                 "status": result.status
             },
             "message": "视频添加成功"
@@ -127,6 +188,42 @@ async def add_video(video: VideoAdd):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"添加视频失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/bili/videos/fill_titles")
+async def fill_titles():
+    """为队列中没有标题的条目补全标题（按BV号去重请求）"""
+    try:
+        videos = bili_dao.get_bili_videos()
+        missing = [v for v in videos if not v.title]
+        if not missing:
+            return {"success": True, "data": {"filled": 0}, "message": "所有条目都有标题"}
+
+        # 按 BV 号分组，一个视频只请求一次
+        bv_groups: dict = {}
+        for v in missing:
+            bv = v.bv_id.split("_p")[0]
+            bv_groups.setdefault(bv, []).append(v)
+
+        filled = 0
+        for bv, entries in bv_groups.items():
+            base_title, pages = await _fetch_video_meta(bv)
+            multi = len(pages) > 1
+            for v in entries:
+                page_no = int(v.bv_id.split("_p")[1]) if "_p" in v.bv_id else 1
+                pg = next((p for p in pages if p.get("page") == page_no), None)
+                part_name = (pg.get("part") if pg else "") or ""
+                entry_title = _compose_title(base_title, page_no, part_name, multi)
+                if entry_title:
+                    bili_dao.update_bili_video_title(v.bv_id, entry_title)
+                    filled += 1
+            # 轻微间隔，避免请求过快
+            await asyncio.sleep(0.5)
+
+        return {"success": True, "data": {"filled": filled, "total_missing": len(missing)}, "message": f"已补全 {filled} 个标题"}
+    except Exception as e:
+        logger.error(f"补全标题失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

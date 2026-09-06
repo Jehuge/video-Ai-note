@@ -1,7 +1,9 @@
 import { useEffect, useState, useRef } from 'react'
-import { FileVideo, Music, FileText, BookOpen, RotateCcw, Eye, Play } from 'lucide-react'
+import { FileVideo, Music, FileText, BookOpen, RotateCcw, Eye, Play, Square, Ban } from 'lucide-react'
 import { useTaskStore } from '../store/taskStore'
-import { getTaskStatus, confirmStep, regenerateNote } from '../services/api'
+import { getTaskStatus, cancelTask, confirmStep, regenerateNote, retranscribeTask, getTranscriberConfig } from '../services/api'
+import { useNoteStyles } from '../hooks/useNoteStyles'
+import { parseBiliTaskName } from '../utils/biliName'
 import StepProgress, { StepStatus } from './StepProgress'
 import ContentPreviewModal from './ContentPreviewModal'
 import MarkdownContent from './MarkdownContent'
@@ -22,14 +24,64 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
     content: any
     title: string
   } | null>(null)
-  const [noteStyle, setNoteStyle] = useState('simple')
+  const noteStyles = useNoteStyles()
+  // 注意：控件 JSX 会被缓存进 steps 状态，受控组件会因闭包失效（勾选/切换被重置），
+  // 因此这里全部用 ref + 非受控控件，点击时读取最新值
+  const noteStyleRef = useRef('simple')
+  const boardModeRef = useRef(false)
+  const [engineName, setEngineName] = useState('faster-whisper')
+  const [canceling, setCanceling] = useState(false)
 
-  const noteStyles = [
-    { value: 'simple', label: '简洁模式 (默认)' },
-    { value: 'detailed', label: '详细模式' },
-    { value: 'academic', label: '学术模式' },
-    { value: 'creative', label: '创意模式' },
-  ]
+  // 手动停止生成中的任务：后端置为 canceled，后台线程在检查点自行中断
+  const handleCancelTask = async () => {
+    if (!taskId || canceling) return
+    setCanceling(true)
+    try {
+      const response = await cancelTask(taskId)
+      if (response.data.code === 200) {
+        toast.success('已停止生成')
+        setAutoProcess(false)
+        // 立即拉取一次最新状态（含停止前最后的部分内容），不等下一次轮询
+        try {
+          const resp = await getTaskStatus(taskId)
+          if (resp.data.code === 200) {
+            const d = resp.data.data
+            updateTask(taskId, {
+              status: d.status,
+              errorMessage: d.error_message || '已手动停止生成',
+              partialMarkdown: d.partial_markdown || task?.partialMarkdown || '',
+              progressMessage: d.progress_message || '',
+            })
+            updateStepsStatus(d.status, d)
+          }
+        } catch {
+          // 拉取失败也无妨，下一次轮询会补上
+        }
+      } else {
+        toast.error(response.data.msg || '停止失败，请重试')
+      }
+    } catch (error) {
+      console.error('停止任务失败:', error)
+      toast.error('停止失败，请重试')
+    } finally {
+      setCanceling(false)
+    }
+  }
+
+  useEffect(() => {
+    getTranscriberConfig()
+      .then((res: any) => {
+        if (res?.data?.data?.engine === 'funasr') setEngineName('FunASR (Paraformer)')
+      })
+      .catch(() => {})
+  }, [])
+
+  // 切换任务时清空上一个任务的残留数据，防止转写内容串台
+  useEffect(() => {
+    setTranscript(null)
+    setPreviewContent(null)
+    setSteps([])
+  }, [taskId])
 
   // 初始化步骤
   useEffect(() => {
@@ -89,7 +141,7 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
       {
         id: 'transcribe',
         name: '音频转写',
-        description: '使用本地 faster-whisper 将音频转换为文字',
+        description: `使用本地 ${engineName} 将音频转换为文字`,
         status: (isTranscribeCompleted
           ? 'completed'
           : task.status === 'transcribing'
@@ -105,21 +157,51 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
               <FileText className="w-4 h-4" />
               <span>转写完成，共 {transcriptSegmentCount} 条片段</span>
             </div>
-            <button
-              onClick={() => {
-                if (transcript) {
-                  setPreviewContent({
-                    type: 'transcript',
-                    content: transcript,
-                    title: '音频转写内容',
-                  })
-                }
-              }}
-              className="flex items-center gap-1 px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors"
-            >
-              <Eye className="w-3 h-3" />
-              查看
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={async (e) => {
+                  e.stopPropagation()
+                  if (!window.confirm('重新转写会使用当前设置的转写引擎重新识别整段音频，耗时较长，确定继续吗？')) return
+                  try {
+                    setSteps((prev) =>
+                      prev.map((step) =>
+                        step.id === 'transcribe' ? { ...step, status: 'processing' as StepStatus } : step
+                      )
+                    )
+                    await retranscribeTask(taskId)
+                    toast.success('已开始重新转写...')
+                    setAutoProcess(true)
+                  } catch (error: any) {
+                    toast.error(error.response?.data?.msg || '重新转写失败')
+                    setSteps((prev) =>
+                      prev.map((step) =>
+                        step.id === 'transcribe' ? { ...step, status: 'completed' as StepStatus } : step
+                      )
+                    )
+                  }
+                }}
+                className="flex items-center gap-1 px-2 py-1 text-xs bg-gray-100 text-gray-600 rounded hover:bg-gray-200 transition-colors"
+                title="使用当前转写引擎重新识别"
+              >
+                <RotateCcw className="w-3 h-3" />
+                重新转写
+              </button>
+              <button
+                onClick={() => {
+                  if (transcript) {
+                    setPreviewContent({
+                      type: 'transcript',
+                      content: transcript,
+                      title: '音频转写内容',
+                    })
+                  }
+                }}
+                className="flex items-center gap-1 px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors"
+              >
+                <Eye className="w-3 h-3" />
+                查看
+              </button>
+            </div>
           </div>
         ) : null,
         onClick: isTranscribeCompleted ? () => {
@@ -135,8 +217,8 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
       {
         id: 'summarize',
         name: '生成笔记',
-        description: '使用 GPT 生成结构化笔记',
-        status: (['summarizing', 'completed'].includes(task.status)
+        description: '使用 GPT 生成结构化笔记（自动纠正语音转写的同音字与术语错误）',
+        status: ((['summarizing', 'completed'].includes(task.status) || (task.status === 'transcribed' && task.markdown))
           ? task.status === 'summarizing'
             ? 'processing'
             : 'completed'
@@ -152,7 +234,7 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
               )
             )
 
-            await regenerateNote(taskId, noteStyle)
+            await regenerateNote(taskId, noteStyleRef.current, boardModeRef.current)
             setAutoProcess(true)
           } catch (error: any) {
             console.error('开始生成笔记失败:', error)
@@ -165,17 +247,18 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
           }
         },
         customControl: (
-          <div className="mt-4 flex flex-col sm:flex-row gap-3">
+          <div className="mt-4 flex flex-col gap-3">
+            <div className="flex flex-col sm:flex-row gap-3">
             <div className="relative">
               <select
-                value={noteStyle}
-                onChange={(e) => setNoteStyle(e.target.value)}
+                defaultValue="simple"
+                onChange={(e) => { noteStyleRef.current = e.target.value }}
                 className="appearance-none block w-full sm:w-48 pl-4 pr-10 py-2.5 text-sm border border-slate-200 rounded-lg bg-slate-50 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all cursor-pointer hover:bg-white hover:border-blue-300"
                 onClick={(e) => e.stopPropagation()}
               >
                 {noteStyles.map((style) => (
-                  <option key={style.value} value={style.value}>
-                    {style.label}
+                  <option key={style.id} value={style.id}>
+                    {style.icon} {style.name}{style.builtin ? '' : ' (自定义)'}
                   </option>
                 ))}
               </select>
@@ -197,9 +280,35 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
               <Play className="w-4 h-4 fill-current" />
               开始生成
             </button>
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer select-none">
+                <input
+                  id="board-mode-toggle"
+                  type="checkbox"
+                  defaultChecked={false}
+                  onChange={(e) => { boardModeRef.current = e.target.checked }}
+                  className="board-toggle w-4 h-4 accent-blue-600 cursor-pointer"
+                />
+                <span className="font-medium">看题模式</span>
+                <span className="text-xs text-slate-400">题目写在视频里？开启后抽取关键帧，用视觉模型转录板书题目与公式进笔记</span>
+              </label>
+              <div className="board-panel mt-3">
+                  <input
+                    defaultValue={localStorage.getItem('visionModel') || ''}
+                    onChange={(e) => localStorage.setItem('visionModel', e.target.value)}
+                    placeholder="视觉模型名（留空则使用当前模型，需支持图片理解，如 glm-4v-flash / Qwen2.5-VL）"
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                  />
+                  <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
+                    使用当前「模型配置」的服务商与密钥；生成时会在截图位置附上转录的题目文字。开启后步骤耗时和 API 用量会增加。
+                  </p>
+              </div>
+            </div>
           </div>
         ),
-        result: task.markdown && task.status === 'completed' ? (
+        result: task.markdown && ['completed', 'transcribed'].includes(task.status) ? (
           <div className="flex flex-col gap-3">
             <div className="flex items-center justify-between text-sm text-emerald-600 p-3 bg-emerald-50 rounded-lg border border-emerald-100">
               <div className="flex items-center gap-2 font-medium">
@@ -225,7 +334,7 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
             </div>
           </div>
         ) : null,
-        onClick: task.markdown && task.status === 'completed' ? () => {
+        onClick: task.markdown && ['completed', 'transcribed'].includes(task.status) ? () => {
           if (task.markdown) {
             setPreviewContent({
               type: 'markdown',
@@ -235,16 +344,17 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
           }
         } : undefined,
         completedControl: (
-          <div className="mt-4 pt-4 border-t border-slate-100 flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
+          <div className="mt-4 pt-4 border-t border-slate-100 flex flex-col gap-3" onClick={(e) => e.stopPropagation()}>
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
             <div className="relative">
               <select
-                value={noteStyle}
-                onChange={(e) => setNoteStyle(e.target.value)}
+                defaultValue="simple"
+                onChange={(e) => { noteStyleRef.current = e.target.value }}
                 className="appearance-none block w-full sm:w-40 pl-3 pr-8 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all cursor-pointer hover:border-blue-300 shadow-sm"
               >
                 {noteStyles.map((style) => (
-                  <option key={style.value} value={style.value}>
-                    {style.label}
+                  <option key={style.id} value={style.id}>
+                    {style.icon} {style.name}{style.builtin ? '' : ' (自定义)'}
                   </option>
                 ))}
               </select>
@@ -252,6 +362,27 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
                 <svg className="h-3 w-3 fill-current" viewBox="0 0 20 20">
                   <path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" />
                 </svg>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 w-full">
+              <input
+                id="board-mode-toggle-done"
+                type="checkbox"
+                defaultChecked={false}
+                onChange={(e) => { boardModeRef.current = e.target.checked }}
+                className="board-toggle-done w-4 h-4 accent-blue-600 cursor-pointer"
+              />
+              <label htmlFor="board-mode-toggle-done" className="text-xs text-slate-600 cursor-pointer select-none">
+                看题模式
+              </label>
+              <div className="board-panel-done w-full">
+                <input
+                  defaultValue={localStorage.getItem('visionModel') || ''}
+                  onChange={(e) => localStorage.setItem('visionModel', e.target.value)}
+                  placeholder="视觉模型名（留空则使用当前模型，需支持图片理解，如 glm-4v-flash / Qwen2.5-VL）"
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                />
               </div>
             </div>
 
@@ -265,7 +396,7 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
                     )
                   )
 
-                  await regenerateNote(taskId, noteStyle)
+                  await regenerateNote(taskId, noteStyleRef.current, boardModeRef.current)
                   toast.success('正在重新生成笔记...')
                   setAutoProcess(true)
                 } catch (error: any) {
@@ -284,13 +415,14 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
               <RotateCcw className="w-3.5 h-3.5" />
               重新生成
             </button>
+            </div>
           </div>
         )
       },
     ]
 
     setSteps(initialSteps)
-  }, [task, transcript, noteStyle])
+  }, [task, transcript])
 
   const tasksRef = useRef(tasks)
   const updateTaskRef = useRef(updateTask)
@@ -347,7 +479,7 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
     if (!taskId) return
 
     const task = tasks.find((t) => t.id === taskId)
-    if (!task || (['completed', 'transcribed'].includes(task.status) && !autoProcess) || task.status === 'failed') {
+    if (!task || (['completed', 'transcribed'].includes(task.status) && !autoProcess) || task.status === 'failed' || task.status === 'canceled') {
       return
     }
 
@@ -372,7 +504,7 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
 
           updateStepsStatus(taskData.status, taskData)
 
-          if (taskData.status === 'completed' || taskData.status === 'failed' || taskData.status === 'transcribed') {
+          if (taskData.status === 'completed' || taskData.status === 'failed' || taskData.status === 'transcribed' || taskData.status === 'canceled') {
             clearInterval(interval)
             setAutoProcess(false)
           }
@@ -388,7 +520,7 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
   const updateStepsStatus = (status: string, taskData: any) => {
     setSteps((prev) =>
       prev.map((step) => {
-        if (status === 'failed') {
+        if (status === 'failed' || status === 'canceled') {
           if (step.status === 'processing' || step.status === 'waiting_confirm') {
             return { ...step, status: 'failed' as StepStatus }
           }
@@ -396,48 +528,12 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
         }
 
         if (step.id === 'transcribe') {
-          if (taskData.transcript && taskData.transcript.segments) {
-            return {
-              ...step,
-              status: 'completed' as StepStatus,
-              result: (
-                <div className="flex items-center justify-between text-sm text-green-600">
-                  <div className="flex items-center gap-2">
-                    <FileText className="w-4 h-4" />
-                    <span>转写完成，共 {taskData.transcript.segments.length} 条片段</span>
-                  </div>
-                  <button
-                    onClick={() => {
-                      if (taskData.transcript) {
-                        setPreviewContent({
-                          type: 'transcript',
-                          content: taskData.transcript,
-                          title: '音频转写内容',
-                        })
-                      }
-                    }}
-                    className="flex items-center gap-1 px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors"
-                  >
-                    <Eye className="w-3 h-3" />
-                    查看
-                  </button>
-                </div>
-              ),
-              onClick: () => {
-                if (taskData.transcript) {
-                  setPreviewContent({
-                    type: 'transcript',
-                    content: taskData.transcript,
-                    title: '音频转写内容',
-                  })
-                }
-              },
-            }
-          } else if (status === 'transcribing') {
+          // 转写步骤的完整 UI（含重新转写按钮）由初始化 effect 依据 transcript 状态构建，
+          // 这里只处理进行中的动画状态，避免硬编码覆盖
+          if (status === 'transcribing') {
             return { ...step, status: 'processing' as StepStatus }
-          } else if (status === 'transcribed') {
-            return { ...step, status: 'completed' as StepStatus }
           }
+          return step
         }
 
         if (status === 'processing' && step.id === 'extract') {
@@ -475,30 +571,6 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
                   <span>音频提取完成</span>
                 </div>
               )
-            } else if (step.id === 'transcribe' && taskData.transcript) {
-              result = (
-                <div className="flex items-center justify-between text-sm text-green-600">
-                  <div className="flex items-center gap-2">
-                    <FileText className="w-4 h-4" />
-                    <span>转写完成，共 {taskData.transcript.segments?.length || 0} 条片段</span>
-                  </div>
-                  <button
-                    onClick={() => {
-                      if (taskData.transcript) {
-                        setPreviewContent({
-                          type: 'transcript',
-                          content: taskData.transcript,
-                          title: '音频转写内容',
-                        })
-                      }
-                    }}
-                    className="flex items-center gap-1 px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors"
-                  >
-                    <Eye className="w-3 h-3" />
-                    查看
-                  </button>
-                </div>
-              )
             } else if (step.id === 'summarize' && taskData.markdown) {
               result = (
                 <div className="flex items-center justify-between text-sm text-green-600">
@@ -528,13 +600,7 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
               ...step,
               status: 'completed' as StepStatus,
               result,
-              onClick: step.id === 'transcribe' && taskData.transcript ? () => {
-                setPreviewContent({
-                  type: 'transcript',
-                  content: taskData.transcript,
-                  title: '音频转写内容',
-                })
-              } : step.id === 'summarize' && taskData.markdown ? () => {
+              onClick: step.id === 'summarize' && taskData.markdown ? () => {
                 setPreviewContent({
                   type: 'markdown',
                   content: taskData.markdown,
@@ -557,7 +623,7 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
         )
       )
 
-      await confirmStep(taskId, stepId, stepId === 'summarize' ? noteStyle : undefined)
+      await confirmStep(taskId, stepId, stepId === 'summarize' ? noteStyleRef.current : undefined, stepId === 'summarize' ? boardModeRef.current : undefined)
       setAutoProcess(true)
     } catch (error) {
       console.error('确认步骤失败:', error)
@@ -588,8 +654,18 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
             {/* 任务头部信息 - 现在是流的一部分 */}
             <div className="mb-8 pl-1">
               <h2 className="text-2xl font-bold text-gray-900 break-words leading-tight mb-2" title={task.filename}>
-                {task.filename}
+                {parseBiliTaskName(task.filename || '').isBili
+                  ? parseBiliTaskName(task.filename).mainTitle
+                  : task.filename}
               </h2>
+              {(() => {
+                const info = parseBiliTaskName(task.filename || '')
+                return info.isBili && info.subTitle ? (
+                  <p className="text-sm text-gray-500 mb-1 break-all" title={task.filename}>
+                    {info.subTitle}
+                  </p>
+                ) : null
+              })()}
               <p className="text-sm text-gray-500 font-medium opacity-80">任务 ID: {task.id.slice(0, 8)}...</p>
               {task.status === 'failed' && task.errorMessage && (
                 <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -618,7 +694,18 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
                       {task.progressMessage || '正在生成笔记'}
                     </p>
                   </div>
-                  <div className="h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
+                  <div className="flex items-center gap-3">
+                    <div className="h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
+                    <button
+                      onClick={handleCancelTask}
+                      disabled={canceling}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      title="停止生成（保留转写结果，可重新生成）"
+                    >
+                      <Square className="w-3 h-3 fill-current" />
+                      {canceling ? '正在停止…' : '停止'}
+                    </button>
+                  </div>
                 </div>
                 <div className="max-h-96 overflow-y-auto p-5">
                   {task.partialMarkdown ? (
@@ -626,6 +713,30 @@ export default function TaskSteps({ taskId }: TaskStepsProps) {
                   ) : (
                     <div className="text-sm text-slate-400">正在等待模型返回第一段内容...</div>
                   )}
+                </div>
+              </div>
+            )}
+
+            {task.status === 'canceled' && (
+              <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4 flex items-start gap-3">
+                <Ban className="w-4 h-4 mt-0.5 shrink-0 text-slate-400" />
+                <div>
+                  <p className="text-sm font-medium text-slate-700">已停止生成</p>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {task.errorMessage || '已手动停止生成'}。转写结果已保留，可随时重新生成笔记。
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {task.status === 'canceled' && task.partialMarkdown && (
+              <div className="mt-6 rounded-2xl border border-amber-100 bg-white shadow-sm overflow-hidden">
+                <div className="border-b border-slate-100 px-5 py-3">
+                  <h4 className="text-sm font-semibold text-slate-900">停止前已生成的内容</h4>
+                  <p className="text-xs text-slate-500 mt-0.5">可以切换模型后重新生成，App 会复用已有转写。</p>
+                </div>
+                <div className="max-h-96 overflow-y-auto p-5">
+                  <MarkdownContent markdown={task.partialMarkdown} />
                 </div>
               </div>
             )}

@@ -1,16 +1,21 @@
 import os
+import re
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPException, Body, Request
 from pydantic import BaseModel
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
-from app.db.video_task_dao import create_task, get_task_by_id, get_all_tasks, update_task_status, delete_task_by_id
-from app.services.note import NoteGenerator
+from app.db.video_task_dao import create_task, get_task_by_id, get_all_tasks, is_task_canceled, update_task_status, delete_task_by_id
+from app.services.note import NoteGenerator, IMAGE_OUTPUT_DIR, IMAGE_BASE_URL
+from app.services.vision import describe_frame
 from app.services.model_settings import load_active_model_config
-from app.services.note_progress import read_note_progress
+from app.services.note_progress import clear_note_progress, read_note_progress
+from app.services.note_format import normalize_note_markdown
 from app.services.web_video import cancel_jobs_for_task
 from app.utils.response import ResponseWrapper as R
 from app.utils.logger import get_logger
@@ -51,6 +56,9 @@ def _write_task_model_config(task_id: str, model_config: Optional[dict]) -> None
 
 def run_note_task_step(task_id: str, video_path: str, filename: str, step: str, screenshot: bool = False):
     """执行单个步骤"""
+    if is_task_canceled(task_id):
+        logger.info(f"任务已手动停止，跳过步骤执行: {task_id}, step={step}")
+        return
     try:
         # 尝试读取模型配置
         model_config = None
@@ -97,6 +105,18 @@ def run_note_task_step(task_id: str, video_path: str, filename: str, step: str, 
                 task_id
             )
             update_task_status(task_id, "transcribed")
+            # 重新转写场景：此前已生成过笔记时，恢复 completed 状态，
+            # 避免笔记查看/导出入口因状态回退而消失（markdown 仍在）
+            try:
+                task_row = get_task_by_id(task_id)
+            except Exception as exc:
+                # This is only a post-transcription status repair. A transient
+                # lookup failure must not turn an otherwise successful step
+                # into a failed task.
+                logger.warning(f"转写后检查任务状态失败，保留 transcribed 状态: {exc}")
+                task_row = None
+            if task_row and task_row.markdown:
+                update_task_status(task_id, "completed")
             logger.info(f"转写完成: {task_id}")
             
         elif step == "summarize":
@@ -115,27 +135,99 @@ def run_note_task_step(task_id: str, video_path: str, filename: str, step: str, 
                     logger.info(f"已删除缓存以重新生成带截图的笔记: {cache_file}")
             
             # 生成笔记
+            if is_task_canceled(task_id):
+                logger.info(f"任务已手动停止，跳过生成: {task_id}")
+                return
             update_task_status(task_id, "summarizing")
             audio_path = generator._extract_audio(video_path, task_id)
             transcript = generator._transcribe_audio(audio_path, task_id)
+
+            # 看题模式：采集每一页完整板书（自动去重/翻页检测）并视觉转录
+            board_pages_meta = None
+            if screenshot:
+                try:
+                    from app.services.board_capture import capture_board_pages
+                    from pathlib import Path as _Path
+                    pages = capture_board_pages(video_path, out_dir=str(IMAGE_OUTPUT_DIR))
+                    board_pages_meta = []
+                    for pg in pages:
+                        text = ""
+                        try:
+                            text = describe_frame(pg.image_path, model_config) or ""
+                        except Exception as ve:
+                            logger.warning(f"板书识别失败（第{pg.index + 1}页，跳过）: {ve}")
+                        board_pages_meta.append({
+                            "index": pg.index,
+                            "start": pg.start,
+                            "end": pg.end,
+                            "image_url": f"{IMAGE_BASE_URL.rstrip('/')}/{_Path(pg.image_path).name}",
+                            "text": text,
+                        })
+                    logger.info(f"板书采集完成: {len(board_pages_meta)} 页")
+                except Exception as be:
+                    logger.error(f"板书采集失败，退回普通模式: {be}", exc_info=True)
+                    board_pages_meta = None
+
             # 如果启用了截图，禁用缓存确保重新生成
-            markdown = generator._summarize_text(transcript, filename, task_id, screenshot, use_cache=not screenshot, note_style=note_style)
+            markdown = generator._summarize_text(transcript, filename, task_id, screenshot, use_cache=not screenshot, note_style=note_style, board_pages=board_pages_meta)
+
+            # 看题模式：把 [[BOARD_PAGE i]] 占位替换为截图+板书内容；未被引用的页追加到文末
+            if board_pages_meta:
+                import re as _re
+                referenced = set()
+
+                def _board_quote(text: str) -> str:
+                    """把板书内容排成引用块，多行时每行都要有 > 前缀"""
+                    nl = chr(10)
+                    lines = (text or "").splitlines() or [""]
+                    quoted = nl.join("> " + line if line.strip() else ">" for line in lines)
+                    return "> 📋 **板书内容**" + nl + quoted + nl
+
+                def _replace_marker(m):
+                    idx = int(m.group(1))
+                    referenced.add(idx)
+                    page = next((p for p in board_pages_meta if p["index"] == idx), None)
+                    if not page:
+                        return ""
+                    nl = chr(10)
+                    block = nl + nl + "![](" + page["image_url"] + ")" + nl
+                    if page.get("text"):
+                        block += nl + _board_quote(page["text"]) + nl
+                    return block
+                markdown = _re.sub(r"\[\[BOARD_PAGE (\d+)\]\]", _replace_marker, markdown)
+                missing = [p for p in board_pages_meta if p["index"] not in referenced]
+                if missing:
+                    nl = chr(10)
+                    extra = [nl * 2 + "## 附：其余板书页" + nl]
+                    for p in missing:
+                        start_s = int(p["start"])
+                        extra.append(nl * 2 + f"### [{start_s // 60}:{start_s % 60:02d}] 第{p['index'] + 1}页" + nl)
+                        extra.append(nl * 2 + "![](" + p["image_url"] + ")" + nl)
+                        if p.get("text"):
+                            extra.append(nl + _board_quote(p["text"]) + nl)
+                    markdown = markdown + "".join(extra)
             
-            # 清理 AI 输出中的思考过程标签（redacted_reasoning）
-            import re
-            markdown = re.sub(r'<think>.*?</think>', '', markdown, flags=re.DOTALL | re.IGNORECASE)
-            markdown = re.sub(r'<think>[\s\S]*?</think>', '', markdown, flags=re.IGNORECASE)
-            # 清理多余的空白行
-            markdown = re.sub(r'\n\s*\n\s*\n', '\n\n', markdown)
+            markdown = normalize_note_markdown(markdown)
             
             # 后处理：插入截图
             if screenshot:
                 markdown = generator._insert_screenshots(markdown, video_path, task_id)
-            
+                markdown = normalize_note_markdown(markdown)
+                (NOTE_OUTPUT_DIR / f"{task_id}_markdown.md").write_text(markdown, encoding="utf-8")
+
+            # 用户在生成期间点了停止：丢弃结果，保持 canceled 状态
+            if is_task_canceled(task_id):
+                logger.info(f"任务已手动停止，丢弃已生成内容: {task_id}")
+                return
+
             update_task_status(task_id, "completed", markdown)
             logger.info(f"笔记生成完成: {task_id}")
-            
+
     except Exception as e:
+        # 手动停止的场景下状态已是 canceled，不要再覆盖为 failed
+        if is_task_canceled(task_id):
+            logger.info(f"任务已手动停止: {task_id}, step={step}")
+            return
         logger.error(f"步骤执行失败: {task_id}, step={step}, 错误: {e}", exc_info=True)
         update_task_status(task_id, "failed", error_message=str(e))
 
@@ -257,9 +349,11 @@ def get_task(task_id: str):
             "updated_at": task.updated_at.isoformat() if task.updated_at else None,
         }
         
-        # 如果任务已完成或有 markdown，都返回 markdown
+        # Normalize on read as well as during generation so notes created by an
+        # older build cannot bypass the Markdown structure rules when previewed
+        # or sent to the HTML/CSS PDF print page.
         if task.markdown:
-            result["markdown"] = task.markdown
+            result["markdown"] = normalize_note_markdown(task.markdown)
 
         progress = read_note_progress(NOTE_OUTPUT_DIR, task_id)
         if progress:
@@ -307,6 +401,49 @@ def list_tasks(limit: int = 50):
 class RegenerateRequest(BaseModel):
     modelConfig: Optional[dict] = None  # 使用驼峰命名，避免与 Pydantic 的 model_config 冲突
     noteStyle: Optional[str] = None
+    screenshot: Optional[bool] = None  # 看题模式：开启后抽取视频帧并调用视觉模型转录板书
+
+@router.post("/task/{task_id}/retranscribe")
+def retranscribe(
+    task_id: str,
+    background_tasks: BackgroundTasks = BackgroundTasks()
+):
+    """重新转写音频（使用当前设置的转写引擎重新识别）"""
+    try:
+        task = get_task_by_id(task_id)
+        if not task:
+            return R.error("任务不存在")
+
+        transcript_file = NOTE_OUTPUT_DIR / f"{task_id}_transcript.json"
+        if not transcript_file.exists():
+            return R.error("该任务还没有转写结果")
+
+        file_ext = Path(task.filename).suffix.lower()
+        file_path = UPLOAD_DIR / f"{task_id}{file_ext}"
+        if not file_path.exists():
+            return R.error("源文件不存在，无法重新转写")
+
+        # 删除转写缓存，强制引擎真正重新识别（否则会直接读旧结果）
+        transcript_file = NOTE_OUTPUT_DIR / f"{task_id}_transcript.json"
+        if transcript_file.exists():
+            transcript_file.unlink()
+            logger.info(f"已删除转写缓存，强制重新识别: {task_id}")
+
+        update_task_status(task_id, "transcribing")
+        background_tasks.add_task(
+            run_note_task_step,
+            task_id=task_id,
+            video_path=str(file_path),
+            filename=task.filename,
+            step="transcribe",
+            screenshot=bool(getattr(task, 'screenshot', 0))
+        )
+        logger.info(f"已触发重新转写: {task_id}")
+        return R.success(msg="已开始重新转写")
+    except Exception as e:
+        logger.error(f"重新转写失败: {task_id}, 错误: {e}", exc_info=True)
+        return R.error(f"重新转写失败: {e}")
+
 
 @router.post("/task/{task_id}/regenerate")
 def regenerate_note(
@@ -333,8 +470,10 @@ def regenerate_note(
         if not file_path.exists():
             return R.error("文件不存在")
         
-        # 获取截图设置
+        # 获取截图设置（请求可覆盖：看题模式）
         screenshot = bool(getattr(task, 'screenshot', 0))
+        if request and request.screenshot is not None:
+            screenshot = request.screenshot
         
         # 获取模型配置（如果提供）
         model_config_dict = None
@@ -406,6 +545,7 @@ class ConfirmStepRequest(BaseModel):
     step: str
     modelConfig: Optional[dict] = None
     noteStyle: Optional[str] = None
+    screenshot: Optional[bool] = None  # 看题模式覆盖（不传则沿用任务创建时的设置）
 
 @router.post("/task/{task_id}/confirm_step")
 def confirm_step(task_id: str, request: ConfirmStepRequest, background_tasks: BackgroundTasks = BackgroundTasks()):
@@ -461,6 +601,8 @@ def confirm_step(task_id: str, request: ConfirmStepRequest, background_tasks: Ba
             transcript_file = NOTE_OUTPUT_DIR / f"{task_id}_transcript.json"
             if task.status not in {"transcribing", "transcribed"} and not transcript_file.exists():
                 return R.error("请先完成音频转写")
+            if request.screenshot is not None:
+                screenshot = request.screenshot
             background_tasks.add_task(
                 run_note_task_step,
                 task_id=task_id,
@@ -481,231 +623,62 @@ def confirm_step(task_id: str, request: ConfirmStepRequest, background_tasks: Ba
 
 @router.get("/task/{task_id}/export_pdf")
 def export_pdf(task_id: str):
-    """导出笔记为 PDF（可复制文本）- 使用 reportlab"""
+    """使用 ReportLab 直接导出可复制文本的 PDF。"""
+    from app.services.pdf_export import render_note_pdf
+
+    task = get_task_by_id(task_id)
+    if not task:
+        return R.error("任务不存在")
+    if not task.markdown:
+        return R.error("笔记内容不存在")
+
     try:
-        from fastapi.responses import FileResponse
-        from reportlab.lib.pagesizes import A4
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.lib.units import cm
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, PageBreak
-        from reportlab.lib.enums import TA_LEFT, TA_CENTER
-        from reportlab.pdfbase import pdfmetrics
-        from reportlab.pdfbase.ttfonts import TTFont
-        import re
-        import base64
-        from io import BytesIO
-        import os
-        
-        # 检查任务是否存在
+        title = Path(task.filename).stem.strip() or "笔记"
+        with tempfile.TemporaryDirectory(prefix="video-note-pdf-") as temp_dir:
+            pdf_path = Path(temp_dir) / "note.pdf"
+            render_note_pdf(task.markdown, title, pdf_path, NOTE_OUTPUT_DIR)
+            pdf_data = pdf_path.read_bytes()
+        safe_name = re.sub(r"[\\/:*?\"<>|]+", "_", title).strip() or "note"
+        download_name = f"{safe_name}_note.pdf"
+        return Response(
+            content=pdf_data,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f"attachment; filename*=utf-8''{quote(download_name)}"
+            },
+        )
+    except Exception as exc:
+        logger.error(f"导出 PDF 失败: {exc}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content=R.error("导出 PDF 失败，请查看后端日志后重试"),
+        )
+
+@router.post("/task/{task_id}/cancel")
+def cancel_task(task_id: str):
+    """手动停止正在处理的任务
+
+    只修改数据库状态为 canceled，由后台线程在取消检查点自行中断：
+    - 流式生成循环（每 50 个事件检查一次）
+    - 长文分块循环（每段开始前）
+    - 各步骤的进入/收尾守卫
+    进度文件保留，前端可继续展示已生成的部分内容。
+    """
+    try:
         task = get_task_by_id(task_id)
         if not task:
             return R.error("任务不存在")
-        
-        if not task.markdown:
-            return R.error("笔记内容不存在")
-        
-        # 注册中文字体（使用系统字体或默认字体）
-        try:
-            # 尝试注册系统中文字体（macOS 优先）
-            font_paths = [
-                '/System/Library/Fonts/STHeiti Medium.ttc',  # macOS 黑体 Medium
-                '/System/Library/Fonts/STHeiti Light.ttc',  # macOS 黑体 Light
-                '/System/Library/Fonts/Supplemental/Songti.ttc',  # macOS 宋体
-                '/System/Library/Fonts/PingFang.ttc',  # macOS 苹方
-                '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',  # Linux
-                'C:/Windows/Fonts/simsun.ttc',  # Windows 宋体
-                'C:/Windows/Fonts/simhei.ttf',  # Windows 黑体
-            ]
-            
-            chinese_font_name = 'ChineseFont'
-            font_registered = False
-            
-            for font_path in font_paths:
-                if os.path.exists(font_path):
-                    try:
-                        # 对于 .ttc 文件，需要指定字体索引（通常是 0）
-                        if font_path.endswith('.ttc'):
-                            # TTC 文件可能包含多个字体，尝试索引 0
-                            pdfmetrics.registerFont(TTFont(chinese_font_name, font_path, subfontIndex=0))
-                        else:
-                            pdfmetrics.registerFont(TTFont(chinese_font_name, font_path))
-                        font_registered = True
-                        logger.info(f"成功注册中文字体: {font_path}")
-                        break
-                    except Exception as e:
-                        logger.warning(f"注册字体失败 {font_path}: {e}")
-                        # 如果 subfontIndex 失败，尝试不使用索引
-                        try:
-                            pdfmetrics.registerFont(TTFont(chinese_font_name, font_path))
-                            font_registered = True
-                            logger.info(f"成功注册中文字体（无索引）: {font_path}")
-                            break
-                        except Exception as e2:
-                            logger.warning(f"注册字体失败（无索引） {font_path}: {e2}")
-                            continue
-            
-            # 如果没有找到系统字体，使用 reportlab 的默认字体（可能不支持中文）
-            if not font_registered:
-                logger.warning("未找到中文字体，使用默认字体（可能不支持中文）")
-                chinese_font_name = 'Helvetica'
-        except Exception as e:
-            logger.warning(f"字体注册失败: {e}，使用默认字体")
-            chinese_font_name = 'Helvetica'
-        
-        # 创建 PDF
-        pdf_path = NOTE_OUTPUT_DIR / f"{task_id}_export.pdf"
-        doc = SimpleDocTemplate(
-            str(pdf_path),
-            pagesize=A4,
-            rightMargin=2*cm,
-            leftMargin=2*cm,
-            topMargin=2*cm,
-            bottomMargin=2*cm
-        )
-        
-        # 创建样式（使用中文字体）
-        styles = getSampleStyleSheet()
-        title_style = ParagraphStyle(
-            'CustomTitle',
-            parent=styles['Heading1'],
-            fontName=chinese_font_name,
-            fontSize=18,
-            textColor='#333333',
-            spaceAfter=12,
-        )
-        heading_style = ParagraphStyle(
-            'CustomHeading',
-            parent=styles['Heading2'],
-            fontName=chinese_font_name,
-            fontSize=14,
-            textColor='#333333',
-            spaceAfter=8,
-            spaceBefore=12,
-        )
-        normal_style = ParagraphStyle(
-            'CustomNormal',
-            parent=styles['Normal'],
-            fontName=chinese_font_name,
-            fontSize=11,
-            textColor='#333333',
-            leading=16,
-            spaceAfter=6,
-        )
-        
-        # 构建内容
-        story = []
-        
-        # 解析 markdown 内容
-        lines = task.markdown.split('\n')
-        i = 0
-        while i < len(lines):
-            line = lines[i]
-            stripped = line.strip()
-            
-            if not stripped:
-                story.append(Spacer(1, 6))
-                i += 1
-                continue
-            
-            # 处理标题
-            if stripped.startswith('###'):
-                text = stripped[3:].strip()
-                if text:
-                    story.append(Paragraph(text, heading_style))
-            elif stripped.startswith('##'):
-                text = stripped[2:].strip()
-                if text:
-                    story.append(Paragraph(text, title_style))
-            elif stripped.startswith('#'):
-                text = stripped[1:].strip()
-                if text:
-                    story.append(Paragraph(text, title_style))
-            # 处理图片
-            elif '![](' in stripped:
-                match = re.search(r'!\[\]\(([^)]+)\)', stripped)
-                if match:
-                    img_path = match.group(1)
-                    try:
-                        from PIL import Image as PILImage
-                        
-                        # 计算可用页面大小（A4 减去边距）
-                        available_width = A4[0] - 4*cm  # 左右各 2cm
-                        available_height = A4[1] - 4*cm  # 上下各 2cm
-                        max_width = available_width
-                        max_height = available_height * 0.6  # 图片最多占页面高度的 60%
-                        
-                        img_obj = None
-                        # 处理 base64 图片
-                        if img_path.startswith('data:'):
-                            # 提取 base64 数据
-                            parts = img_path.split(',', 1)
-                            if len(parts) == 2:
-                                base64_data = parts[1]
-                                img_data = base64.b64decode(base64_data)
-                                img_obj = PILImage.open(BytesIO(img_data))
-                        # 处理本地文件路径
-                        elif '/api/note_results/screenshots/' in img_path or '/screenshots/' in img_path:
-                            filename = img_path.split('/')[-1]
-                            local_path = NOTE_OUTPUT_DIR / "screenshots" / filename
-                            if local_path.exists():
-                                img_obj = PILImage.open(str(local_path))
-                        
-                        if img_obj:
-                            # 获取原始尺寸
-                            orig_width, orig_height = img_obj.size
-                            
-                            # 计算缩放比例，确保图片适应页面
-                            width_ratio = max_width / orig_width
-                            height_ratio = max_height / orig_height
-                            ratio = min(width_ratio, height_ratio, 1.0)  # 不超过原始大小
-                            
-                            # 计算新尺寸
-                            new_width = orig_width * ratio
-                            new_height = orig_height * ratio
-                            
-                            # 创建临时文件保存调整后的图片
-                            temp_buffer = BytesIO()
-                            img_obj.save(temp_buffer, format='JPEG', quality=85)
-                            temp_buffer.seek(0)
-                            
-                            # 添加到 PDF
-                            img = Image(temp_buffer, width=new_width, height=new_height)
-                            story.append(Spacer(1, 6))
-                            story.append(img)
-                            story.append(Spacer(1, 6))
-                    except Exception as e:
-                        logger.warning(f"无法加载图片 {img_path}: {e}")
-            # 处理列表项
-            elif stripped.startswith('-') or stripped.startswith('*'):
-                text = stripped[1:].strip()
-                if text:
-                    # 转义 HTML 特殊字符
-                    text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                    story.append(Paragraph(f"• {text}", normal_style))
-            # 处理普通文本
-            else:
-                # 转义 HTML 特殊字符
-                text = stripped.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                if text:
-                    story.append(Paragraph(text, normal_style))
-            
-            i += 1
-        
-        # 生成 PDF
-        doc.build(story)
-        
-        return FileResponse(
-            pdf_path,
-            media_type='application/pdf',
-            filename=f"{task.filename.replace('.', '_')}_note.pdf"
-        )
-        
-    except ImportError as e:
-        logger.error(f"PDF 导出依赖未安装: {e}")
-        return R.error("PDF 导出功能需要安装 reportlab 库。请运行: pip install reportlab")
+
+        if task.status in ("completed", "failed", "canceled"):
+            return R.success(None, msg="任务已结束，无需停止")
+
+        update_task_status(task_id, "canceled", error_message="已手动停止生成")
+        cancel_jobs_for_task(task_id)
+        logger.info(f"任务已手动停止: {task_id}, 原状态: {task.status}")
+        return R.success(None, msg="任务已停止")
     except Exception as e:
-        logger.error(f"导出 PDF 失败: {e}", exc_info=True)
-        return R.error(f"导出 PDF 失败: {str(e)}")
+        logger.error(f"停止任务失败: {task_id}, {e}", exc_info=True)
+        return R.error(f"停止任务失败: {str(e)}")
 
 
 @router.delete("/task/{task_id}")
@@ -738,6 +711,11 @@ def delete_task(task_id: str):
             markdown_file = NOTE_OUTPUT_DIR / f"{task_id}_markdown.md"
             if markdown_file.exists():
                 markdown_file.unlink()
+
+            # 兼容清理由旧版持久化导出流程留下的公开 PDF。
+            export_file = NOTE_OUTPUT_DIR / f"{task_id}_export.pdf"
+            if export_file.exists():
+                export_file.unlink()
             
             transcript_file = NOTE_OUTPUT_DIR / f"{task_id}_transcript.json"
             if transcript_file.exists():

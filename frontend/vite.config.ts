@@ -11,6 +11,11 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Windows 下文件监听经常失效，改用轮询（300ms），根治"改了代码页面不更新"
+    watch: {
+      usePolling: true,
+      interval: 300,
+    },
     proxy: {
       '/api': {
         target: 'http://localhost:8483',

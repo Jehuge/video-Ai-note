@@ -21,5 +21,8 @@ def create_app(lifespan=None) -> FastAPI:
     
     from app.routers import files
     app.include_router(files.router, prefix="/api", tags=["files"])
-    
+
+    from app.routers import note_styles
+    app.include_router(note_styles.router, prefix="/api", tags=["note-styles"])
+
     return app

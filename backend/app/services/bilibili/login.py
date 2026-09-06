@@ -4,7 +4,6 @@ Bilibili 登录模块
 """
 
 import asyncio
-import sys
 from typing import Optional
 
 from playwright.async_api import BrowserContext, Page
@@ -12,6 +11,7 @@ from tenacity import RetryError, retry, retry_if_result, stop_after_attempt, wai
 
 from app.utils.bili_logger import logger
 from app.utils.browser_util import convert_cookies
+from .exception import DataFetchError
 
 
 class BilibiliLogin:
@@ -76,14 +76,14 @@ class BilibiliLogin:
             
         except Exception as e:
             logger.error(f"未找到登录二维码: {e}")
-            sys.exit()
+            raise DataFetchError("未找到登录二维码，无法进行扫码登录")
 
         logger.info("等待扫码登录，最多等待10分钟...")
         try:
             await self.check_login_state()
         except RetryError:
             logger.error("二维码登录超时失败")
-            sys.exit()
+            raise DataFetchError("二维码登录超时")
 
         wait_redirect_seconds = 5
         logger.info(f"登录成功! 等待 {wait_redirect_seconds} 秒后继续...")

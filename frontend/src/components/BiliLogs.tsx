@@ -3,14 +3,14 @@ import { FileVideo, RefreshCw, PlayCircle } from 'lucide-react'
 import { getBiliHistory, BiliDownloadHistory } from '../services/biliApi'
 import ContentPreviewModal from './ContentPreviewModal'
 
-const BiliHistoryPanel: React.FC = () => {
+const BiliHistoryPanel: React.FC<{ refreshKey?: number }> = ({ refreshKey = 0 }) => {
     const [history, setHistory] = useState<BiliDownloadHistory[]>([])
     const [loading, setLoading] = useState(false)
     const [previewVideo, setPreviewVideo] = useState<{ url: string, title: string } | null>(null)
 
     useEffect(() => {
         loadHistory()
-    }, [])
+    }, [refreshKey])
 
     const loadHistory = async () => {
         setLoading(true)

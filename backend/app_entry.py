@@ -198,7 +198,6 @@ def main():
     else:
         server_thread = ServerThread(app, host, port)
         server_thread.start()
-        threading.Thread(target=ensure_playwright_chromium, daemon=True).start()
     
     # 等待服务器启动
     # 虽然 pywebview 会一直加载，但最好确保端口可达

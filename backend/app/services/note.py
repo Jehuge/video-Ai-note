@@ -5,14 +5,17 @@ import subprocess
 from pathlib import Path
 from typing import Optional, List, Tuple
 
-from app.db.video_task_dao import update_task_status
-from app.gpt.openai_gpt import OpenAIGPT
+from app.db.video_task_dao import is_task_canceled, update_task_status
+from app.gpt.openai_gpt import OpenAIGPT, TaskCancelledError
 from app.models.notes_model import NoteResult
 from app.services.model_provider import normalize_api_key, normalize_base_url, normalize_provider_type
 from app.services.note_progress import clear_note_progress, write_note_progress
+from app.services.note_format import normalize_note_markdown
 from app.transcriber.transcriber_provider import get_transcriber
 from app.utils.logger import get_logger
 from app.utils.video_helper import generate_screenshot
+from app.services.vision import describe_frame
+from app.services.board_capture import capture_board_pages
 from app.utils.ffmpeg_helper import get_ffmpeg_path, hidden_subprocess_kwargs
 
 logger = get_logger(__name__)
@@ -103,17 +106,18 @@ class NoteGenerator:
             # 3. GPT 生成笔记
             update_task_status(task_id, "summarizing")
             markdown = self._summarize_text(transcript, filename, task_id, screenshot, note_style=note_style)
-            
-            # 清理 AI 输出中的思考过程标签（redacted_reasoning）
-            import re
-            markdown = re.sub(r'<think>.*?</think>', '', markdown, flags=re.DOTALL | re.IGNORECASE)
-            markdown = re.sub(r'<think>[\s\S]*?</think>', '', markdown, flags=re.IGNORECASE)
-            # 清理多余的空白行
-            markdown = re.sub(r'\n\s*\n\s*\n', '\n\n', markdown)
+
+            # 用户可能在生成刚结束时点了停止：丢弃结果，保持 canceled 状态
+            if is_task_canceled(task_id):
+                raise TaskCancelledError("已手动停止生成")
+
+            markdown = normalize_note_markdown(markdown)
             
             # 4. 后处理：插入截图
             if screenshot:
-                markdown = self._insert_screenshots(markdown, video_path)
+                markdown = self._insert_screenshots(markdown, video_path, task_id)
+                markdown = normalize_note_markdown(markdown)
+                cache_file.write_text(markdown, encoding='utf-8')
             
             # 5. 保存结果
             update_task_status(task_id, "completed", markdown)
@@ -125,7 +129,14 @@ class NoteGenerator:
                 filename=filename
             )
             
+        except TaskCancelledError:
+            logger.info(f"任务已手动停止: {task_id}")
+            raise
         except Exception as exc:
+            # 手动停止的场景下状态已是 canceled，不要再覆盖为 failed
+            if is_task_canceled(task_id):
+                logger.info(f"任务已手动停止: {task_id}")
+                raise
             logger.error(f"生成笔记失败 (task_id={task_id}): {exc}", exc_info=True)
             update_task_status(task_id, "failed", error_message=str(exc))
             raise
@@ -214,30 +225,40 @@ class NoteGenerator:
         logger.info("转录完成")
         return transcript
     
-    def _summarize_text(self, transcript, filename: str, task_id: str, screenshot: bool = False, use_cache: bool = True, note_style: str = "simple") -> str:
-        """使用 GPT 生成笔记"""
-        logger.info(f"开始生成笔记... (screenshot={screenshot}, use_cache={use_cache}, style={note_style})")
+    def _summarize_text(self, transcript, filename: str, task_id: str, screenshot: bool = False, use_cache: bool = True, note_style: str = "simple", board_pages: list = None) -> str:
+        """使用 GPT 生成笔记（board_pages 提供时走板书时间线模式）"""
+        logger.info(f"开始生成笔记... (screenshot={screenshot}, use_cache={use_cache}, style={note_style}, board={len(board_pages) if board_pages else 0})")
         
-        # 检查缓存（如果允许使用缓存）
+        # 检查缓存（如果允许使用缓存；板书模式每次都重新生成，因为板书页可能更新）
         cache_file = NOTE_OUTPUT_DIR / f"{task_id}_markdown.md"
-        if use_cache and cache_file.exists():
+        if use_cache and not board_pages and cache_file.exists():
             # 如果启用了截图但缓存中没有截图标记，强制重新生成
             if screenshot:
                 cached_content = cache_file.read_text(encoding='utf-8')
                 import re
-                pattern = r"\*Screenshot-\[(\d{2}):(\d{2})\]|\*Screenshot-(\d{2}):(\d{2})"
+                pattern = r"\*Screenshot-\[(\d+):(\d{2})\]|\*Screenshot-(\d+):(\d{2})"
                 if not re.search(pattern, cached_content):
                     logger.info(f"缓存中没有截图标记，强制重新生成 (screenshot={screenshot})")
                     cache_file.unlink()
                 else:
                     logger.info(f"使用缓存: {cache_file}")
-                    return cached_content
+                    normalized = normalize_note_markdown(cached_content)
+                    if normalized != cached_content:
+                        cache_file.write_text(normalized, encoding='utf-8')
+                    return normalized
             else:
                 logger.info(f"使用缓存: {cache_file}")
-                return cache_file.read_text(encoding='utf-8')
+                cached_content = cache_file.read_text(encoding='utf-8')
+                normalized = normalize_note_markdown(cached_content)
+                if normalized != cached_content:
+                    cache_file.write_text(normalized, encoding='utf-8')
+                return normalized
         
         # 调用 GPT（延迟初始化）
         gpt = self._get_gpt()
+        # 注入取消检查：流式循环中周期性查询任务状态，用户点停止后及时中断。
+        # 取消时不清理进度文件，保留已生成的部分内容供前端展示
+        gpt.cancel_check = lambda: is_task_canceled(task_id)
         write_note_progress(NOTE_OUTPUT_DIR, task_id, "正在请求 AI 生成笔记", "")
 
         def on_note_progress(message: str, partial_markdown: str) -> None:
@@ -249,16 +270,10 @@ class NoteGenerator:
             screenshot,
             note_style,
             progress_callback=on_note_progress,
+            board_pages=board_pages,
         )
         
-        # 清理 AI 输出中的思考过程标签（redacted_reasoning）
-        # 删除所有 <think>...</think> 标签及其内容
-        import re
-        markdown = re.sub(r'<think>.*?</think>', '', markdown, flags=re.DOTALL | re.IGNORECASE)
-        # 也处理可能的多行格式
-        markdown = re.sub(r'<think>[\s\S]*?</think>', '', markdown, flags=re.IGNORECASE)
-        # 清理多余的空白行
-        markdown = re.sub(r'\n\s*\n\s*\n', '\n\n', markdown)
+        markdown = normalize_note_markdown(markdown)
         
         # 保存缓存
         cache_file.write_text(markdown, encoding='utf-8')
@@ -299,13 +314,21 @@ class NoteGenerator:
                 filename = Path(img_path).name
                 # 直接生成正确的 URL（截图在 note_results/screenshots 目录下）
                 img_url = f"{IMAGE_BASE_URL.rstrip('/')}/{filename}"
-                
+
+                # 板书识别：调用视觉模型转录帧内题目/公式，失败则静默跳过
+                board_text = None
+                try:
+                    board_text = describe_frame(img_path, self.model_config)
+                except Exception as ve:
+                    logger.warning(f"板书识别异常（跳过）: {ve}")
+                board_block = ('\n> 📋 **板书内容**：' + board_text + '\n') if board_text else ""
+
                 # 智能替换：在标记所在位置插入图片，保持原有结构
                 # 处理带 * 的标记
                 marker_with_star = f"{marker}*"
                 if marker_with_star in markdown:
                     # 替换带 * 的标记，在标记位置插入图片
-                    markdown = markdown.replace(marker_with_star, f"\n\n![]({img_url})\n\n", 1)
+                    markdown = markdown.replace(marker_with_star, f"\n\n![]({img_url}){board_block}\n\n", 1)
                 else:
                     # 替换标记：找到标记所在位置，在该位置插入图片
                     # 如果标记在单独一行，直接替换该行
@@ -324,9 +347,14 @@ class NoteGenerator:
                                 new_lines.append(cleaned_line)
                                 new_lines.append('')  # 空行
                                 new_lines.append(f"![]({img_url})")
+                                if board_block:
+                                    new_lines.append(board_block.strip())
                             else:
                                 # 这行只有标记：直接替换为图片
                                 new_lines.append(f"![]({img_url})")
+                                if board_block:
+                                    new_lines.append('')
+                                    new_lines.append(board_block.strip())
                             
                             # 检查下一行是否是空行或新章节，如果不是则添加空行
                             if i + 1 < len(lines):
@@ -342,7 +370,7 @@ class NoteGenerator:
                     
                     if not replaced:
                         # 如果没找到，使用简单替换
-                        markdown = markdown.replace(marker, f"\n\n![]({img_url})\n\n", 1)
+                        markdown = markdown.replace(marker, f"\n\n![]({img_url}){board_block}\n\n", 1)
                     else:
                         markdown = '\n'.join(new_lines)
                 
@@ -353,7 +381,7 @@ class NoteGenerator:
                 continue
         
         # 清理多余的换行和格式问题
-        markdown = re.sub(r'\n{4,}', '\n\n\n', markdown)  # 将4个以上连续换行替换为3个（保留章节间的分隔）
+        markdown = re.sub(r'\n{3,}', '\n\n', markdown)  # 统一为最多一个空行，避免图片块制造大段空白
         markdown = re.sub(r'!\[\]\([^)]+\)\*', lambda m: m.group(0).rstrip('*'), markdown)  # 清理图片后的 * 符号
         
         # 最后修复所有图片路径（确保都是新路径，包括刚生成的）
@@ -419,7 +447,7 @@ class NoteGenerator:
         :return: 标记与对应时间戳秒数的列表 [(标记文本, 时间戳秒数), ...]
         """
         # 匹配 *Screenshot-[mm:ss] 或 *Screenshot-mm:ss 格式
-        pattern = r"\*Screenshot-\[(\d{2}):(\d{2})\]|\*Screenshot-(\d{2}):(\d{2})"
+        pattern = r"\*Screenshot-\[(\d+):(\d{2})\]|\*Screenshot-(\d+):(\d{2})"
         results: List[Tuple[str, int]] = []
         for match in re.finditer(pattern, markdown):
             # group(1) 和 group(2) 是 [mm:ss] 格式，group(3) 和 group(4) 是 mm:ss 格式
@@ -429,4 +457,3 @@ class NoteGenerator:
                 total_seconds = int(mm) * 60 + int(ss)
                 results.append((match.group(0), total_seconds))
         return results
-

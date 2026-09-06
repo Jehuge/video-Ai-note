@@ -81,7 +81,7 @@ def update_bili_config(config: Dict):
 
 # ==================== 视频管理 ====================
 
-def create_bili_video(bv_id: str, url: str = "") -> BiliVideo:
+def create_bili_video(bv_id: str, url: str = "", title: str = None) -> BiliVideo:
     """添加视频到列表"""
     db = SessionLocal()
     try:
@@ -89,10 +89,11 @@ def create_bili_video(bv_id: str, url: str = "") -> BiliVideo:
         existing = db.query(BiliVideo).filter(BiliVideo.bv_id == bv_id).first()
         if existing:
             raise ValueError(f"视频 {bv_id} 已存在")
-        
+
         video = BiliVideo(
             bv_id=bv_id,
             url=url,
+            title=title,
             status="pending"
         )
         db.add(video)
@@ -103,6 +104,23 @@ def create_bili_video(bv_id: str, url: str = "") -> BiliVideo:
     except Exception as e:
         db.rollback()
         logger.error(f"添加视频失败: {e}")
+        raise
+    finally:
+        db.close()
+
+
+def update_bili_video_title(bv_id: str, title: str):
+    """只更新视频标题，不改状态"""
+    db = SessionLocal()
+    try:
+        video = db.query(BiliVideo).filter(BiliVideo.bv_id == bv_id).first()
+        if video:
+            video.title = title
+            video.updated_at = func.now()
+            db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error(f"更新视频标题失败: {bv_id}: {e}")
         raise
     finally:
         db.close()

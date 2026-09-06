@@ -17,11 +17,12 @@ Video Note AI 是一个本地运行的视频笔记应用。它可以上传本地
 - 语音识别配置：App 端保留本地 `faster-whisper` 转写设置，支持模型、设备、精度等参数配置。
 - AI 模型配置：支持 OpenAI 兼容 API 的模型提供商配置，适配 OpenAI、DeepSeek、通义、硅基流动、LM Studio、Ollama 等兼容服务。
 - B 站下载：保留原有 Bilibili 下载和任务管理能力。
+- PDF 导出：使用 Mistune + ReportLab 在后端直接生成，不依赖 Chromium 或前端页面。
 - 桌面打包：提供 Windows 和 macOS 打包脚本，桌面端通过 `127.0.0.1:8483` 对插件提供本机桥接服务。
 
 ## 技术架构
 
-- 后端：FastAPI、SQLite、SQLAlchemy、yt-dlp、ffmpeg、faster-whisper。
+- 后端：FastAPI、SQLite、SQLAlchemy、yt-dlp、ffmpeg、faster-whisper、Mistune、ReportLab。
 - 前端：React、TypeScript、Vite、Zustand、lucide-react。
 - 桌面端：pywebview + PyInstaller，内置前端静态资源和 FastAPI 服务。
 - 浏览器插件：Chrome/Edge Manifest V3，content script + background service worker + popup。

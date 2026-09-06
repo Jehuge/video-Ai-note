@@ -7,6 +7,7 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError
 from app.gpt.base import GPT
 from app.models.transcriber_model import TranscriptResult
 from app.services.openai_client import create_openai_client
+from app.services.note_format import MARKDOWN_FORMAT_RULES
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -21,6 +22,10 @@ NOTE_GENERATION_MODE = os.getenv("NOTE_GENERATION_MODE", "auto").strip().lower()
 ProgressCallback = Callable[[str, str], None]
 
 
+class TaskCancelledError(RuntimeError):
+    """用户手动停止任务时抛出，用于中断流式生成循环"""
+
+
 class OpenAIGPT(GPT):
     """Generate video notes through an OpenAI-compatible chat API."""
 
@@ -32,6 +37,10 @@ class OpenAIGPT(GPT):
         if not self.api_key:
             raise ValueError("OPENAI_API_KEY is not configured")
 
+        # 由调用方注入（返回 True 表示任务已被手动停止），
+        # 在流式循环与分块循环中周期性检查，及时中断生成
+        self.cancel_check: Optional[Callable[[], bool]] = None
+
         self.client = create_openai_client(
             api_key=self.api_key,
             base_url=self.base_url,
@@ -41,6 +50,12 @@ class OpenAIGPT(GPT):
 
         logger.info(f"Initialized OpenAI-compatible GPT: model={self.model}")
 
+    def _raise_if_canceled(self) -> None:
+        check = self.cancel_check
+        if check is not None and check():
+            logger.info("Task canceled by user; aborting note generation")
+            raise TaskCancelledError("已手动停止生成")
+
     def summarize(
         self,
         transcript: TranscriptResult,
@@ -48,13 +63,48 @@ class OpenAIGPT(GPT):
         screenshot: bool = False,
         note_style: str = "simple",
         progress_callback: Optional[ProgressCallback] = None,
+        board_pages: Optional[List[dict]] = None,
     ) -> str:
-        logger.info(f"Start note generation (screenshot={screenshot}, style={note_style})")
+        logger.info(f"Start note generation (screenshot={screenshot}, style={note_style}, board_pages={len(board_pages) if board_pages else 0})")
+
+        if board_pages:
+            # 板书时间线模式：逐页完整记录 + 按视频时间线梳理 + 结尾总结
+            prompt = self._build_board_prompt(transcript, filename, note_style, board_pages)
+            system_content = (
+                "You are a professional video-note assistant specialized in lecture board capture. "
+                "Write clear, well-structured Chinese Markdown notes organized strictly by the video timeline.\n\n"
+                f"{MARKDOWN_FORMAT_RULES}"
+            )
+            try:
+                markdown = self._complete_markdown(
+                    system_content,
+                    prompt,
+                    temperature=0.5,
+                    progress_callback=progress_callback,
+                    progress_message="正在按板书时间线生成笔记",
+                )
+            except Exception as exc:
+                if self._is_context_limit_error(exc):
+                    logger.info("Board-mode prompt hit context limit; falling back to chunked without board pages")
+                    prompt = self._build_prompt(transcript, filename, False, note_style)
+                    markdown = self._summarize_long_transcript(
+                        transcript=transcript,
+                        filename=filename,
+                        screenshot=False,
+                        note_style=note_style,
+                        system_content=system_content,
+                        progress_callback=progress_callback,
+                    )
+                else:
+                    raise
+            logger.info("Board-mode note generation completed")
+            return markdown
 
         prompt = self._build_prompt(transcript, filename, screenshot, note_style)
         system_content = (
             "You are a professional video-note assistant. Write clear, well-structured, "
-            "information-rich Chinese Markdown notes from video transcripts."
+            "information-rich Chinese Markdown notes from video transcripts.\n\n"
+            f"{MARKDOWN_FORMAT_RULES}"
         )
         if screenshot:
             system_content += (
@@ -116,7 +166,7 @@ class OpenAIGPT(GPT):
             logger.info("Note generation completed")
 
             if screenshot:
-                pattern = r"\*Screenshot-\[(\d{2}):(\d{2})\]|\*Screenshot-(\d{2}):(\d{2})"
+                pattern = r"\*Screenshot-\[(\d+):(\d{2})\]|\*Screenshot-(\d+):(\d{2})"
                 matches = list(re.finditer(pattern, markdown))
                 if matches:
                     logger.info(f"Generated note contains {len(matches)} screenshot markers")
@@ -137,6 +187,7 @@ class OpenAIGPT(GPT):
         progress_callback: Optional[ProgressCallback] = None,
         progress_message: str = "正在生成笔记",
     ) -> str:
+        self._raise_if_canceled()
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[
@@ -164,7 +215,12 @@ class OpenAIGPT(GPT):
     ) -> str:
         chunks = []
         last_emit_len = 0
+        event_count = 0
         for event in response:
+            event_count += 1
+            if event_count % 50 == 0:
+                # 周期性检查取消标记，避免手动停止后仍继续生成
+                self._raise_if_canceled()
             if not getattr(event, "choices", None):
                 continue
             delta = event.choices[0].delta
@@ -254,6 +310,7 @@ class OpenAIGPT(GPT):
             progress_callback(f"正在拆分长视频：共 {len(chunks)} 段", "")
 
         for index, chunk in enumerate(chunks, start=1):
+            self._raise_if_canceled()
             message = f"正在生成第 {index}/{len(chunks)} 段摘要"
             logger.info("Generating intermediate note chunk %s/%s (%s segments)", index, len(chunks), len(chunk))
             chunk_prompt = self._build_chunk_prompt(chunk, filename, index, len(chunks), screenshot)
@@ -318,6 +375,7 @@ class OpenAIGPT(GPT):
                     "The following are intermediate Chinese video-note summaries from a long video.\n"
                     "Compress them into a denser Chinese outline while preserving timestamps, facts, examples, "
                     "names, parameters, and decisions. Do not add a final conclusion yet.\n\n"
+                    f"{MARKDOWN_FORMAT_RULES}\n\n"
                     f"Group {index}/{len(grouped)}:\n---\n{chr(10).join(group)}\n---"
                 )
                 next_round.append(
@@ -376,6 +434,66 @@ class OpenAIGPT(GPT):
     def _format_segments(self, segments: Sequence) -> str:
         return "".join(self._format_segment(segment) for segment in segments)
 
+    def _build_board_prompt(
+        self,
+        transcript: TranscriptResult,
+        filename: str,
+        note_style: str,
+        board_pages: List[dict],
+    ) -> str:
+        """板书时间线模式提示词：逐页完整记录 + 按时间线梳理 + 结尾总结"""
+        from app.services.note_styles import get_style_prompt
+
+        style_instruction = {
+            "detailed": "- 详细展开每页的讲解内容，保留例题与推导。",
+            "academic": "- 语言严谨，强调定义、定理与论证链条。",
+            "creative": "- 表达生动但忠于板书与讲解事实。",
+        }.get(note_style)
+        if not style_instruction:
+            custom = get_style_prompt(note_style)
+            style_instruction = ("- 遵循用户自定义风格要求：" + custom) if custom else "- 简洁凝练，突出重点。"
+
+        timeline_lines = []
+        for pg in board_pages:
+            start_s = int(pg.get("start", 0))
+            end_s = int(pg.get("end", 0))
+            text = (pg.get("text") or "").strip() or "（板书内容待参考截图）"
+            timeline_lines.append(
+                f"[[BOARD_PAGE {pg['index']}]] {start_s // 60}:{start_s % 60:02d}-{end_s // 60}:{end_s % 60:02d}"
+                f"{chr(10)}板书内容：{text}"
+            )
+
+        return f"""根据以下视频转写与板书时间线，生成一篇以视频时间线为主轴的高质量中文 Markdown 学习笔记。
+
+文件名: {filename}
+
+板书时间线（每页一段，[[BOARD_PAGE i]] 是该页截图的占位标记，必须原样保留在对应小节开头）：
+---
+{chr(10).join(timeline_lines)}
+---
+
+组织规则（必须严格遵守）：
+1. 以视频时间线为主线：按板书页顺序逐页梳理，每页一个小节，标题格式为 `### [起止时间] 第N页：<本页主题>`。
+2. 每个小节的第一行必须是该页的 `[[BOARD_PAGE i]]` 占位标记（单独一行，系统会在此插入完整板书截图与转录文字）。
+3. 板书里出现的题目必须原样完整保留（题干、条件、问法一个都不能省），公式用 LaTeX。
+4. 板书之后写本页对应的讲解要点：老师口头讲解的逻辑、推导步骤、例题解题过程（从转写中提炼），以及易错点。
+5. 口语、废话、重复内容过滤掉；老师课堂上的口误、自我纠正、反复尝试（如"等等，不对，让我重新整理"）不要写进笔记，只保留最终正确的结论与推导。
+6. 转写中的同音字错误用上下文修正（特别是数学术语），但不许改变原意、不许编造。
+7. 排版密度：短公式优先行内展示；连续多步推导合并为一个 aligned 公式块，每行一步；每个自然段不超过 4 行，段落之间只留一个空行。
+8. 不要在笔记里暴露任何推理过程用语（如"等等""不对""实际上题目可能是"），直接呈现最终整理好的内容。
+ 9. 全部板书页都要覆盖，一页都不能漏。
+10. 最后必须有「## AI 总结」章节：本节课方法清单、典型例题套路、易错点汇总、考点提示。
+{style_instruction}
+
+{MARKDOWN_FORMAT_RULES}
+
+视频转写内容：
+---
+{self._format_segments(transcript.segments)}
+---
+
+现在开始生成笔记，只输出 Markdown 正文："""
+
     def _build_chunk_prompt(
         self,
         segments: Sequence,
@@ -395,6 +513,8 @@ class OpenAIGPT(GPT):
 Write an intermediate Chinese Markdown outline for this part only.
 Preserve exact timestamps, key facts, examples, tool names, parameters, steps, conclusions, and warnings.
 Do not invent information. Do not write the final whole-video summary yet.{screenshot_instruction}
+
+{MARKDOWN_FORMAT_RULES}
 
 File: {filename}
 
@@ -425,6 +545,15 @@ Segments:
             note_style,
             "Use concise mode: direct key points, short paragraphs, and only the most important concepts and steps.",
         )
+        # 自定义风格优先：用户在设置里配置的提示词模板
+        custom_instruction = None
+        try:
+            from app.services import note_styles
+            custom_instruction = note_styles.get_style_prompt(note_style)
+        except Exception:
+            pass
+        if custom_instruction:
+            style_instruction = custom_instruction
 
         return f"""Create the final Chinese Markdown note for the whole video from these intermediate summaries.
 File: {filename}
@@ -434,9 +563,13 @@ Requirements:
 - Merge duplicate points and keep the original order of the video.
 - Preserve important timestamps as `*Content-[mm:ss]` when useful.
 - Preserve formulas, names, products, parameters, examples, and concrete steps.
+- Math formatting (critical): display math must be a `$$` block that contains ONLY the formula, never Chinese prose, headings, or images. Inline math uses `$...$`.
+- ASR error correction (critical): the intermediate summaries come from speech recognition and may contain homophone errors and misheard technical terms. Use context to fix them; never change the actual meaning or invent content.
 - End with a section named `AI 总结`.
 - Return only the final Markdown content.{screenshot_instruction}
 - {style_instruction}
+
+{MARKDOWN_FORMAT_RULES}
 
 Intermediate summaries:
 ---
@@ -485,6 +618,14 @@ Style: concise mode.
 - Use short paragraphs and bullets.
 - Keep core concepts, conclusions, and steps.""",
         )
+        # 自定义风格优先：用户在设置里配置的提示词模板
+        try:
+            from app.services import note_styles
+            custom_instruction = note_styles.get_style_prompt(note_style)
+            if custom_instruction:
+                style_instruction = "\nStyle: custom mode defined by the user.\n" + custom_instruction
+        except Exception:
+            pass
 
         return f"""Generate a structured Chinese Markdown note from the following video transcript.
 File name: {filename}
@@ -505,8 +646,13 @@ Tasks:
 4. Use Markdown headings and lists with concise paragraphs.
 5. Preserve formulas and render them with LaTeX when present.
 6. Add useful time markers as `*Content-[mm:ss]` when helpful.
+7. Math formatting (critical): display math must be a `$$` block that contains ONLY the formula, never Chinese prose, headings, or images. Inline math uses `$...$`.
+8. ASR error correction (critical): the transcript comes from speech recognition and contains homophone errors and misheard technical terms (especially math/physics terminology). Use context to fix them in the note (e.g. wrong characters in terms, formula names). Never change the actual meaning or invent content that is not supported by the transcript.
+9. Content hygiene: the teacher may mis-speak and self-correct on the fly. Do NOT include the corrections or hesitation ("wait, no, let me redo this") — only the final correct version. For multi-step derivations, use one compact `$$\\begin{{aligned}} ... \\\\ ... \\\\end{{aligned}}$$` block with one step per row. Do not emit a series of one-line display-math blocks.
 {screenshot_instruction}
 {style_instruction}
+
+{MARKDOWN_FORMAT_RULES}
 
 Output:
 - Return only final Markdown content.

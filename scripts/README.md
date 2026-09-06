@@ -47,7 +47,7 @@ If only `CODESIGN_IDENTITY` is set, the app and DMG are signed but not notarized
 - User data is stored outside the app bundle:
   - Windows: `%APPDATA%/VideoNoteAI` when available, otherwise `~/Documents/VideoNoteAI_Data`.
   - macOS: `~/Library/Application Support/VideoNoteAI`.
-- Playwright Chromium is installed during the build unless `SkipPlaywright` or `SKIP_PLAYWRIGHT=1` is used. The packaged app also checks on first launch and installs Chromium into the user data directory if it is missing.
+- Playwright Chromium is used by the legacy Bilibili login/download workflow, not PDF export. It is installed during the build unless `SkipPlaywright` or `SKIP_PLAYWRIGHT=1` is used. The packaged app also checks on first launch and installs Chromium into the user data directory if it is missing.
 
 ## Extension Checks
 

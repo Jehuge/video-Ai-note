@@ -3,7 +3,7 @@ import { create } from 'zustand'
 export interface Task {
   id: string
   filename: string
-  status: 'pending' | 'processing' | 'transcribing' | 'transcribed' | 'summarizing' | 'completed' | 'failed'
+  status: 'pending' | 'processing' | 'transcribing' | 'transcribed' | 'summarizing' | 'completed' | 'failed' | 'canceled'
   markdown?: string
   partialMarkdown?: string
   progressMessage?: string

@@ -19,6 +19,9 @@ export default function ContentPreviewModal({
   taskId,
   onClose,
 }: ContentPreviewModalProps) {
+  // 弹窗外壳立即响应点击；长笔记由 EnhancedMarkdownViewer 在 Web Worker
+  // 中后台编译（内部自带"正在渲染"加载态），不再阻塞 UI 线程
+
   return (
     <div 
       className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4"
@@ -63,7 +66,8 @@ export default function ContentPreviewModal({
             </div>
           ) : (
             <div className="h-full overflow-hidden">
-              <EnhancedMarkdownViewer markdown={content} filename={filename} taskId={taskId} />
+              {/* 弹窗已有标题，查看器只渲染导出按钮行，避免标题重复且保留导出功能 */}
+              <EnhancedMarkdownViewer markdown={content} filename={filename} taskId={taskId} headerMode="actions" />
             </div>
           )}
         </div>

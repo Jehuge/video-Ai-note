@@ -11,8 +11,10 @@ imageio-ffmpeg>=0.5.0
 pydantic==2.11.2
 orjson==3.10.16
 requests==2.32.3
-markdown>=3.0
-reportlab>=4.0.0
+mistune>=3.1,<4
+reportlab>=4.4.3
+ziamath>=0.13,<0.14
+svglib>=2.2,<3
 playwright>=1.40.0
 yt-dlp[default,curl-cffi]>=2026.03.17
 aiofiles>=23.2.1

@@ -7,6 +7,7 @@ import json
 from typing import Any, Dict, Optional, Tuple, Union
 from urllib.parse import urlencode
 
+import aiofiles
 import httpx
 from playwright.async_api import BrowserContext, Page
 
@@ -140,11 +141,11 @@ class BilibiliClient:
     async def get_video_play_url(self, aid: int, cid: int, qn: int = 80) -> Dict:
         """
         获取视频播放URL
-        
+
         Args:
             aid: 视频aid
             cid: 视频cid
-            qn: 清晰度 (16=360p, 32=480p, 64=720p, 80=1080p)
+            qn: 期望清晰度 (16=360p, 32=480p, 64=720p, 80=1080p, 112=1080p+, 120=4K)
         """
         if not aid or not cid or aid <= 0 or cid <= 0:
             raise ValueError("aid 和 cid 必须存在且大于0")
@@ -155,7 +156,9 @@ class BilibiliClient:
             "cid": cid,
             "qn": qn,
             "fourk": 1,
-            "fnval": 1,
+            # 16=DASH, 128=4K: DASH 返回多档清晰度，便于在期望清晰度不存在时
+            # 自动回退到最高可用档位
+            "fnval": 16 | 128,
             "platform": "pc",
         }
 
@@ -164,10 +167,10 @@ class BilibiliClient:
     async def get_video_media(self, url: str) -> Union[bytes, None]:
         """
         下载视频内容
-        
+
         Args:
             url: 视频URL
-        
+
         Returns:
             视频字节内容
         """
@@ -179,9 +182,40 @@ class BilibiliClient:
                 response.raise_for_status()
                 if 200 <= response.status_code < 300:
                     return response.content
-                
+
                 logger.error(f"下载失败，状态码: {response.status_code}, URL: {url}")
                 return None
             except httpx.HTTPError as exc:
                 logger.error(f"下载视频出错: {exc}")
                 return None
+
+    async def download_media_to_file(self, url: str, file_path, progress_cb=None) -> bool:
+        """
+        流式下载媒体文件到磁盘（适合 DASH 大文件，避免占用过多内存）
+
+        Args:
+            url: 媒体URL
+            file_path: 目标文件路径
+            progress_cb: 可选回调 (downloaded_bytes, total_bytes)
+
+        Returns:
+            是否下载成功
+        """
+        async with httpx.AsyncClient(proxy=self.proxy, follow_redirects=True) as client:
+            try:
+                async with client.stream(
+                    "GET", url, timeout=self.timeout, headers=self.headers
+                ) as response:
+                    response.raise_for_status()
+                    total = int(response.headers.get("content-length", 0))
+                    downloaded = 0
+                    async with aiofiles.open(file_path, "wb") as f:
+                        async for chunk in response.aiter_bytes(1024 * 256):
+                            await f.write(chunk)
+                            downloaded += len(chunk)
+                            if progress_cb and total:
+                                progress_cb(downloaded, total)
+                return True
+            except httpx.HTTPError as exc:
+                logger.error(f"下载媒体文件出错: {exc}")
+                return False

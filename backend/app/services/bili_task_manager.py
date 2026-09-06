@@ -153,6 +153,8 @@ class BiliTaskManager:
         """停止下载任务"""
         if self.status == TaskStatus.RUNNING and self.download_task:
             self.status = TaskStatus.STOPPED
+            if self.downloader:
+                self.downloader.request_stop()
             self.download_task.cancel()
             await self.emit_status_change("正在停止")
             await self.emit_log("warning", "下载任务已停止")

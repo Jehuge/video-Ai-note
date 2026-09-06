@@ -32,7 +32,9 @@ def default_transcriber_config() -> Dict[str, str]:
     device = os.getenv("WHISPER_DEVICE", "cpu").strip() or "cpu"
     return {
         "type": LOCAL_TRANSCRIBER_ID,
+        "engine": (os.getenv("TRANSCRIBER_ENGINE", "fast-whisper").strip() or "fast-whisper"),
         "model_size": os.getenv("WHISPER_MODEL_SIZE", "base").strip() or "base",
+        "hotwords": os.getenv("FUNASR_HOTWORDS", "").strip(),
         "device": device,
         "compute_type": os.getenv(
             "WHISPER_COMPUTE_TYPE",
@@ -51,13 +53,19 @@ def normalize_transcriber_config(config: Optional[dict]) -> Dict[str, str]:
     defaults = default_transcriber_config()
     config = config or {}
 
+    engine = str(config.get("engine", defaults["engine"])).strip() or "fast-whisper"
+    if engine not in {"fast-whisper", "whisper", "funasr", "sensevoice", "paraformer"}:
+        engine = "fast-whisper"
+
     payload = {
         "type": LOCAL_TRANSCRIBER_ID,
+        "engine": engine,
         "model_size": config.get("model_size", config.get("modelSize", defaults["model_size"])),
         "device": config.get("device", defaults["device"]),
         "compute_type": config.get("compute_type", config.get("computeType", defaults["compute_type"])),
     }
 
+    payload["hotwords"] = str(config.get("hotwords", defaults.get("hotwords", "")) or "").strip()
     normalized = {key: str(value or "").strip() for key, value in payload.items()}
     if normalized["device"] not in {"cpu", "cuda", "auto"}:
         normalized["device"] = defaults["device"]

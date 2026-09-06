@@ -1,21 +1,40 @@
 import { useEffect, useState } from 'react'
-import { Cpu, Gauge, Loader2, Save, SlidersHorizontal } from 'lucide-react'
+import { Cpu, Gauge, Loader2, Save, SlidersHorizontal, Zap, Sparkles } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { getTranscriberConfig, saveTranscriberConfig, testTranscriberConfig } from '../services/api'
 
 interface TranscriberConfig {
   type: string
+  engine: string
   model_size: string
   device: string
   compute_type: string
+  hotwords?: string
 }
 
 const DEFAULT_CONFIG: TranscriberConfig = {
   type: 'fast-whisper',
+  engine: 'fast-whisper',
   model_size: 'base',
   device: 'cpu',
   compute_type: 'int8',
+  hotwords: '',
 }
+
+const ENGINES = [
+  {
+    value: 'funasr',
+    name: 'FunASR（推荐）',
+    desc: '阿里 Paraformer 中文模型，中文课视频识别更准、CPU 上速度远快于 Whisper；支持热词，模型从国内 ModelScope 下载',
+    tag: '中文课程优化',
+  },
+  {
+    value: 'fast-whisper',
+    name: 'faster-whisper',
+    desc: 'OpenAI Whisper 本地版，多语言通用；模型从 HuggingFace 下载（国内网络可能失败）',
+    tag: '多语言',
+  },
+]
 
 const MODEL_SIZES = ['tiny', 'base', 'small', 'medium', 'large-v3']
 const DEVICES = [
@@ -25,7 +44,7 @@ const DEVICES = [
 ]
 const COMPUTE_TYPES = ['int8', 'float16', 'float32']
 
-export default function TranscriberSettings() {
+export default function TranscriberSettings({ embedded = false }: { embedded?: boolean }) {
   const [config, setConfig] = useState<TranscriberConfig>(DEFAULT_CONFIG)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -54,9 +73,11 @@ export default function TranscriberSettings() {
 
   const payload = () => ({
     type: 'fast-whisper',
+    engine: config.engine,
     model_size: config.model_size,
     device: config.device,
     compute_type: config.compute_type,
+    hotwords: config.hotwords || '',
   })
 
   const handleSave = async () => {
@@ -94,7 +115,7 @@ export default function TranscriberSettings() {
 
   if (loading) {
     return (
-      <div className="h-full flex items-center justify-center text-slate-500">
+      <div className={`flex items-center justify-center text-slate-500 ${embedded ? 'py-8' : 'h-full'}`}>
         <Loader2 className="w-5 h-5 animate-spin mr-2" />
         加载设置中...
       </div>
@@ -102,20 +123,66 @@ export default function TranscriberSettings() {
   }
 
   return (
-    <div className="h-full overflow-y-auto bg-slate-50 p-6">
-      <div className="max-w-4xl mx-auto">
+    <div className={embedded ? '' : 'h-full overflow-y-auto bg-slate-50 p-6'}>
+      <div className={embedded ? '' : 'max-w-4xl mx-auto'}>
         <div className="mb-6">
           <h1 className="text-2xl font-bold text-slate-900">本地语音识别</h1>
           <p className="text-sm text-slate-500 mt-1">
-            音频转文字使用源码内置的 faster-whisper 在本机完成；笔记生成的 LLM 厂商在“模型配置”中设置。
+            音频转文字在本机完成，不需要语音识别 API Key；笔记生成的 LLM 厂商在“模型配置”中设置。
           </p>
         </div>
 
         <div className="bg-white border border-slate-200 rounded-lg shadow-sm p-6 space-y-6">
-          <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800">
-            当前识别方式固定为本地 faster-whisper，不需要语音识别 API Key。首次使用会加载或下载模型，CPU 机器上大模型会比较慢。
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">
+              <Zap className="w-4 h-4 inline mr-1" />
+              转写引擎
+            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {ENGINES.map((item) => (
+                <button
+                  key={item.value}
+                  onClick={() => update('engine', item.value)}
+                  className={`text-left p-3 rounded-lg border transition-colors ${
+                    config.engine === item.value
+                      ? 'border-blue-500 bg-blue-50/60 ring-1 ring-blue-200'
+                      : 'border-slate-200 bg-white hover:border-blue-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-sm font-semibold text-slate-800">{item.name}</span>
+                    {item.value === 'funasr' && (
+                      <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-100 text-emerald-700">
+                        <Sparkles className="w-2.5 h-2.5" />
+                        {item.tag}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-500 leading-relaxed">{item.desc}</p>
+                </button>
+              ))}
+            </div>
           </div>
 
+          {config.engine === 'funasr' && (
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">
+                <Sparkles className="w-4 h-4 inline mr-1" />
+                识别热词（空格分隔，可选）
+              </label>
+              <input
+                value={config.hotwords || ''}
+                onChange={(e) => update('hotwords', e.target.value)}
+                placeholder="例如：洛伦兹力 圆锥曲线 傅里叶变换 楞次定律"
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+              <p className="text-xs text-slate-400 mt-1.5">
+                把课程里的专有名词加入热词，可明显提升这些词的识别准确率（对数学、物理课尤其有效）。未填写时使用内置理科热词表。
+              </p>
+            </div>
+          )}
+
+          {config.engine === 'fast-whisper' && (
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-2">
               <Cpu className="w-4 h-4 inline mr-1" />
@@ -137,6 +204,7 @@ export default function TranscriberSettings() {
               ))}
             </div>
           </div>
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>

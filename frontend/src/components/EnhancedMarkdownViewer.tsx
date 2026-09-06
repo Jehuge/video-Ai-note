@@ -1,35 +1,30 @@
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import 'github-markdown-css/github-markdown.css'
-import { Copy, Download, FileDown } from 'lucide-react'
-import { useState, useRef } from 'react'
+import { Copy, Download, FileDown, Loader2 } from 'lucide-react'
+import { useRef, useState } from 'react'
 import toast from 'react-hot-toast'
-import Zoom from 'react-medium-image-zoom'
-import 'react-medium-image-zoom/dist/styles.css'
-import jsPDF from 'jspdf'
-import html2canvas from 'html2canvas'
+import { useNoteRender } from '../hooks/useNoteRender'
 import { exportPDF } from '../services/api'
+import { noteTitle } from '../utils/notePrint'
 
 interface EnhancedMarkdownViewerProps {
   markdown: string
   filename?: string
   taskId?: string
-}
-
-// 获取API基础URL
-const getBaseURL = () => {
-  const baseURL = import.meta.env.VITE_API_BASE_URL || '/api'
-  return baseURL.replace(/\/$/, '')
+  /** 头部模式：full=标题+导出按钮；actions=仅导出按钮（外层已有标题）；none=无头部 */
+  headerMode?: 'full' | 'actions' | 'none'
+  /** @deprecated 兼容旧用法，等价于 headerMode='none' */
+  showHeader?: boolean
 }
 
 export default function EnhancedMarkdownViewer({
   markdown,
   filename,
   taskId,
+  headerMode,
+  showHeader,
 }: EnhancedMarkdownViewerProps) {
+  const mode: 'full' | 'actions' | 'none' =
+    headerMode ?? (showHeader === false ? 'none' : 'full')
   const [copied, setCopied] = useState(false)
-  const markdownRef = useRef<HTMLDivElement>(null)
-  const baseURL = getBaseURL()
 
   const handleCopy = async () => {
     try {
@@ -125,176 +120,66 @@ export default function EnhancedMarkdownViewer({
   }
 
   const handleDownloadPDF = async () => {
-    // 如果提供了 taskId，优先使用后端 API 生成可复制文本的 PDF
-    if (taskId) {
-      try {
-        toast.loading('正在生成PDF（可复制文本），请稍候...', { id: 'pdf-generating' })
-        const response = await exportPDF(taskId)
-        
-        // 创建下载链接
-        const blob = new Blob([response.data], { type: 'application/pdf' })
-        const url = window.URL.createObjectURL(blob)
-        const link = document.createElement('a')
-        link.href = url
-        const name = filename?.replace(/\.[^/.]+$/, '') || 'note'
-        link.download = `${name}.pdf`
-        document.body.appendChild(link)
-        link.click()
-        document.body.removeChild(link)
-        window.URL.revokeObjectURL(url)
-        
-        toast.dismiss('pdf-generating')
-        toast.success('PDF文件已下载（文字可复制）')
-        return
-      } catch (error: any) {
-        console.error('后端PDF生成失败，使用前端生成:', error)
-        // 如果后端失败，fallback 到前端生成
-        if (error.response?.status !== 404) {
-          toast.dismiss('pdf-generating')
-          toast.error('后端PDF生成失败，使用前端生成方式')
-        }
-      }
-    }
-    
-    // 前端生成 PDF（图片模式，文字不可复制）
-    if (!markdownRef.current) {
-      toast.error('无法生成PDF，请稍后重试')
+    if (!taskId) {
+      toast.error('当前笔记未绑定任务，无法导出 PDF')
       return
     }
 
+    const toastId = 'pdf-generating'
     try {
-      if (!taskId) {
-        toast.loading('正在生成PDF（图片模式），请稍候...', { id: 'pdf-generating' })
-      }
-      
-      // 等待所有图片加载完成
-      const images = markdownRef.current.querySelectorAll('img')
-      const imagePromises = Array.from(images).map((img) => {
-        if (img.complete && img.naturalHeight !== 0) {
-          return Promise.resolve()
-        }
-        return new Promise((resolve) => {
-          const timeout = setTimeout(() => {
-            resolve(null) // 超时也继续
-          }, 10000)
-          
-          img.onload = () => {
-            clearTimeout(timeout)
-            resolve(null)
+      toast.loading('正在生成 PDF，请稍候...', { id: toastId })
+      const response = await exportPDF(taskId)
+      const contentType = response.data?.type || ''
+      if (!contentType.includes('application/pdf')) {
+        let message = '服务器没有返回 PDF 文件'
+        if (response.data instanceof Blob) {
+          try {
+            const payload = JSON.parse(await response.data.text())
+            message = payload?.msg || message
+          } catch {
+            // Keep the generic message when the response is not JSON.
           }
-          img.onerror = () => {
-            clearTimeout(timeout)
-            resolve(null) // 即使加载失败也继续
-          }
-        })
-      })
-      await Promise.all(imagePromises)
-
-      // 使用html2canvas将内容转换为canvas，改进配置以避免图片截断
-      const canvas = await html2canvas(markdownRef.current, {
-        scale: 2,
-        useCORS: true,
-        allowTaint: false,
-        logging: false,
-        backgroundColor: '#ffffff',
-        width: markdownRef.current.scrollWidth,
-        height: markdownRef.current.scrollHeight,
-        windowWidth: markdownRef.current.scrollWidth,
-        windowHeight: markdownRef.current.scrollHeight,
-        onclone: (clonedDoc) => {
-          // 确保克隆文档中的图片都已加载
-          const clonedImages = clonedDoc.querySelectorAll('img')
-          clonedImages.forEach((img: HTMLImageElement) => {
-            if (!img.complete) {
-              img.style.display = 'none'
-            }
-          })
         }
-      })
-
-      // 计算PDF尺寸
-      const imgWidth = canvas.width
-      const imgHeight = canvas.height
-      const pdfWidth = 210 // A4宽度（mm）
-      const pdfHeight = (imgHeight * pdfWidth) / imgWidth
-      
-      // 创建PDF
-      const pdf = new jsPDF('p', 'mm', 'a4')
-      const pageHeight = pdf.internal.pageSize.height
-      const pageWidth = pdf.internal.pageSize.width
-      const margin = 10 // 页边距（mm）
-      const contentWidth = pageWidth - 2 * margin
-      
-      // 计算每页可以容纳的高度
-      const contentHeightPerPage = pageHeight - 2 * margin
-      const totalPages = Math.ceil(pdfHeight / contentHeightPerPage)
-      
-      let yPosition = -margin // 从顶部开始，减去 margin 因为 addImage 的 y 是相对于页面的
-      
-      // 添加第一页
-      pdf.addImage(
-        canvas.toDataURL('image/png', 0.95), 
-        'PNG', 
-        margin, 
-        yPosition, 
-        contentWidth, 
-        pdfHeight
-      )
-      
-      // 如果内容超过一页，添加更多页面
-      for (let page = 1; page < totalPages; page++) {
-        pdf.addPage()
-        yPosition = -margin - (page * contentHeightPerPage)
-        pdf.addImage(
-          canvas.toDataURL('image/png', 0.95), 
-          'PNG', 
-          margin, 
-          yPosition, 
-          contentWidth, 
-          pdfHeight
-        )
+        throw new Error(message)
       }
 
-      // 下载PDF
-      const name = filename?.replace(/\.[^/.]+$/, '') || 'note'
-      pdf.save(`${name}.pdf`)
-      
-      toast.dismiss('pdf-generating')
-      toast.success('PDF文件已下载（图片模式，文字不可复制）')
+      const blob = response.data instanceof Blob
+        ? response.data
+        : new Blob([response.data], { type: 'application/pdf' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `${noteTitle(filename)}_note.pdf`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+      toast.success('PDF 已下载', { id: toastId })
     } catch (error) {
-      console.error('生成PDF失败:', error)
-      toast.dismiss('pdf-generating')
-      toast.error('生成PDF失败，请稍后重试')
+      console.error('PDF 导出失败:', error)
+      const message = error instanceof Error ? error.message : 'PDF 导出失败，请稍后重试'
+      toast.error(message, { id: toastId })
     }
   }
 
-  // 处理图片URL，确保使用正确的baseURL
-  const processMarkdown = (md: string) => {
-    // 由于markdown中的路径已经是 /api/note_results/screenshots/...
-    // 而vite代理已经配置了 /api 代理，所以直接返回即可
-    // 不需要再添加baseURL，避免重复
-    return md
-  }
 
-  if (!markdown) {
-    return (
-      <div className="flex h-full items-center justify-center text-gray-400">
-        暂无笔记内容
-      </div>
-    )
-  }
-
-  const processedMarkdown = processMarkdown(markdown)
+  // ===== 渲染管线：markdown-it 在 Web Worker 中整篇编译（不阻塞 UI 线程），
+  // 二次打开走主线程缓存即时显示。html === null 表示后台仍在编译，先出骨架 =====
+  const renderedHtml = useNoteRender(markdown)
+  const contentScrollRef = useRef<HTMLDivElement>(null)
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
-      {/* 固定头部工具栏 */}
+      {/* 固定头部工具栏：full 显示标题，actions 只显示导出按钮 */}
+      {mode !== 'none' && (
       <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4 bg-white shrink-0">
+        {mode === 'full' && (
         <div>
           <h2 className="text-base font-semibold text-gray-900">笔记预览</h2>
           {filename && <p className="text-xs text-gray-500 mt-1">{filename}</p>}
         </div>
-        <div className="flex gap-2">
+        )}
+        <div className={`flex gap-2 ${mode === 'actions' ? 'w-full justify-end' : ''}`}>
           <button
             onClick={handleCopy}
             className="flex items-center gap-2 px-3 py-1.5 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors"
@@ -314,156 +199,30 @@ export default function EnhancedMarkdownViewer({
           <button
             onClick={handleDownloadPDF}
             className="flex items-center gap-2 px-3 py-1.5 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded-lg transition-colors shadow-sm"
-            title="下载PDF文件（包含图片）"
+            title="导出 PDF（后端直接生成）"
           >
             <FileDown className="w-4 h-4" />
             PDF
           </button>
         </div>
       </div>
+      )}
       
-      {/* Markdown内容区域 - 内容自然高度，参与父容器滚动 */}
-      <div className="flex-1 min-h-0 overflow-y-auto">
-        <div 
-          ref={markdownRef}
-          className="markdown-body prose prose-slate max-w-none px-6 py-6 pb-12" 
-        >
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={{
-              // 处理图片，支持缩放
-              img: ({ node, ...props }) => {
-                let src = props.src || ''
-                // 如果已经是完整URL（http/https/data），直接使用
-                if (src.startsWith('http') || src.startsWith('data:')) {
-                  // 已经是完整URL，不需要处理
-                } else if (src.startsWith('/api/')) {
-                  // 路径已经包含 /api/，vite代理会处理，直接使用
-                  // 不需要再添加baseURL
-                } else if (src.startsWith('/')) {
-                  // 其他以 / 开头的路径，可能需要添加baseURL
-                  // 但通常markdown中的路径已经是 /api/... 格式
-                  src = src
-                } else {
-                  // 相对路径，添加baseURL
-                  src = `${baseURL}/${src}`
-                }
-                
-                // 使用 figure 标签包裹图片，避免在 p 标签内嵌套 div
-                return (
-                  <figure className="my-8 flex justify-center">
-                    <Zoom>
-                      <img
-                        src={src}
-                        alt={props.alt || ''}
-                        className="max-w-full cursor-zoom-in rounded-lg object-cover shadow-md transition-all hover:shadow-lg"
-                        style={{ maxHeight: '500px' }}
-                        crossOrigin="anonymous"
-                        onError={(e) => {
-                          // 如果图片加载失败，尝试使用完整URL
-                          const target = e.target as HTMLImageElement
-                          const originalSrc = props.src || ''
-                          console.warn('图片加载失败:', originalSrc, '当前src:', target.src)
-                          // 如果原始路径是 /api/ 开头，说明路径是正确的，可能是服务器问题
-                          // 不需要再次尝试修改URL
-                        }}
-                      />
-                    </Zoom>
-                  </figure>
-                )
-              },
-              // 改进标题样式
-              h1: ({ children, ...props }) => (
-                <h1
-                  className="text-gray-900 my-6 scroll-m-20 text-3xl font-extrabold tracking-tight"
-                  {...props}
-                >
-                  {children}
-                </h1>
-              ),
-              h2: ({ children, ...props }) => (
-                <h2
-                  className="text-gray-900 mt-10 mb-4 scroll-m-20 border-b border-gray-200 pb-2 text-2xl font-semibold tracking-tight first:mt-0"
-                  {...props}
-                >
-                  {children}
-                </h2>
-              ),
-              h3: ({ children, ...props }) => (
-                <h3
-                  className="text-gray-900 mt-8 mb-4 scroll-m-20 text-xl font-semibold tracking-tight"
-                  {...props}
-                >
-                  {children}
-                </h3>
-              ),
-              // 改进段落样式
-              p: ({ children, ...props }) => {
-                // 如果段落只包含一个图片，直接返回图片（不包裹在p中）
-                if (
-                  Array.isArray(children) &&
-                  children.length === 1 &&
-                  typeof children[0] === 'object' &&
-                  children[0] !== null &&
-                  'type' in children[0] &&
-                  (children[0] as any).type === 'figure'
-                ) {
-                  return <>{children}</>
-                }
-                
-                return (
-                  <p className="leading-7 text-gray-700 [&:not(:first-child)]:mt-6" {...props}>
-                    {children}
-                  </p>
-                )
-              },
-              // 改进列表样式
-              ul: ({ children, ordered, ...props }) => (
-                <ul className="my-6 ml-6 list-disc [&>li]:mt-2" {...props}>
-                  {children}
-                </ul>
-              ),
-              ol: ({ children, ordered, ...props }) => (
-                <ol className="my-6 ml-6 list-decimal [&>li]:mt-2" {...props}>
-                  {children}
-                </ol>
-              ),
-              // 改进代码块样式
-              code: ({ inline, className, children, ...props }) => {
-                if (!inline) {
-                  return (
-                    <code
-                      className="block bg-gray-100 rounded-lg p-4 my-4 overflow-x-auto text-sm"
-                      {...props}
-                    >
-                      {children}
-                    </code>
-                  )
-                }
-                return (
-                  <code
-                    className="bg-gray-100 rounded px-1.5 py-0.5 font-mono text-sm"
-                    {...props}
-                  >
-                    {children}
-                  </code>
-                )
-              },
-              // 改进引用样式
-              blockquote: ({ children, ...props }) => (
-                <blockquote
-                  className="border-l-4 border-gray-300 pl-4 italic text-gray-600 my-6"
-                  {...props}
-                >
-                  {children}
-                </blockquote>
-              ),
-            }}
-          >
-            {processedMarkdown}
-          </ReactMarkdown>
-        </div>
+      {/* Markdown内容区域 - worker 编译完成后一次性注入的 HTML */}
+      <div className="flex-1 min-h-0 overflow-y-auto" ref={contentScrollRef}>
+        {renderedHtml === null ? (
+          <div className="h-full flex flex-col items-center justify-center text-gray-400">
+            <Loader2 className="w-6 h-6 animate-spin mb-3" />
+            <p className="text-sm">正在渲染笔记…</p>
+          </div>
+        ) : (
+          <div
+            className="note-md w-full max-w-4xl mx-auto px-6 sm:px-10 py-6"
+            dangerouslySetInnerHTML={{ __html: renderedHtml }}
+          />
+        )}
       </div>
+
     </div>
   )
 }

@@ -37,6 +37,8 @@ hiddenimports = [
     'faster_whisper',
     'yt_dlp',
     'python_multipart',
+    'ziamath',
+    'svglib',
 ]
 
 def safe_collect_data(package_name):
@@ -55,7 +57,7 @@ def safe_collect_binaries(package_name):
         return []
 
 
-for lib in ['faster_whisper', 'ctranslate2', 'imageio_ffmpeg', 'google.generativeai', 'openai', 'yt_dlp', 'playwright']:
+for lib in ['faster_whisper', 'ctranslate2', 'imageio_ffmpeg', 'google.generativeai', 'openai', 'yt_dlp', 'playwright', 'ziamath']:
     datas += safe_collect_data(lib)
     binaries += safe_collect_binaries(lib)
 

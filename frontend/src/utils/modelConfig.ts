@@ -14,6 +14,8 @@ export interface SelectedModelConfig {
   base_url?: string
   model: string
   note_style?: string
+  /** 看题模式用的视觉模型名（需服务商支持图片理解），留空则跟随主模型 */
+  vision_model?: string
 }
 
 export interface SelectedModelDisplay {
@@ -104,6 +106,7 @@ export function getSelectedModelConfig(noteStyle: string = 'simple'): SelectedMo
     base_url: instance.baseUrl || '',
     model: parsed.modelId,
     note_style: noteStyle,
+    vision_model: localStorage.getItem('visionModel') || '',
   }
 }
 

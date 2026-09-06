@@ -60,29 +60,69 @@ export const getTaskStatus = async (taskId: string) => {
   return await api.get(`/task/${taskId}`)
 }
 
+// 手动停止任务（生成/转写等进行中的任务）
+export const cancelTask = async (taskId: string) => {
+  return await api.post(`/task/${taskId}/cancel`)
+}
+
 // 获取任务列表
 export const getTasks = async (limit: number = 50) => {
   return await api.get(`/tasks?limit=${limit}`)
 }
 
+// ==================== 自定义笔记风格 ====================
+
+export interface NoteStyle {
+  id: string
+  name: string
+  icon: string
+  builtin: boolean
+  prompt: string
+}
+
+export const getNoteStyles = async (): Promise<NoteStyle[]> => {
+  const response = await api.get('/note/styles')
+  return response.data.data || []
+}
+
+export const createNoteStyle = async (name: string, prompt: string, icon: string = '📝') => {
+  return await api.post('/note/styles', { name, prompt, icon })
+}
+
+export const updateNoteStyle = async (id: string, data: { name?: string; prompt?: string; icon?: string }) => {
+  return await api.put(`/note/styles/${id}`, data)
+}
+
+export const deleteNoteStyle = async (id: string) => {
+  return await api.delete(`/note/styles/${id}`)
+}
+
+// 重新转写音频（使用当前设置的转写引擎）
+export const retranscribeTask = async (taskId: string) => {
+  const response = await api.post(`/task/${taskId}/retranscribe`)
+  return response.data
+}
+
 // 确认步骤
-export const confirmStep = async (taskId: string, step: string, noteStyle?: string) => {
+export const confirmStep = async (taskId: string, step: string, noteStyle?: string, screenshot?: boolean) => {
   const modelConfig = step === 'summarize' ? getSelectedModelConfig(noteStyle || 'simple') : null
   return await api.post(`/task/${taskId}/confirm_step`, {
     step,
     modelConfig,
     noteStyle,
+    screenshot: screenshot ?? undefined,
   })
 }
 
 // 重新生成笔记
-export const regenerateNote = async (taskId: string, noteStyle?: string) => {
+export const regenerateNote = async (taskId: string, noteStyle?: string, screenshot?: boolean) => {
   const modelConfig = getSelectedModelConfig(noteStyle || 'simple')
 
   // 将模型配置作为请求体传递（使用驼峰命名）
   return await api.post(`/task/${taskId}/regenerate`, {
     modelConfig: modelConfig,
-    noteStyle: noteStyle
+    noteStyle: noteStyle,
+    screenshot: screenshot ?? undefined
   })
 }
 
@@ -153,6 +193,7 @@ export const deleteTask = async (taskId: string) => {
 export const exportPDF = async (taskId: string) => {
   const response = await api.get(`/task/${taskId}/export_pdf`, {
     responseType: 'blob',
+    timeout: 120000,
   })
   return response
 }
@@ -188,4 +229,3 @@ export const createTaskFromFile = async (
 
   return await api.post('/upload', formData)
 }
-

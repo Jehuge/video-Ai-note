@@ -1,27 +1,59 @@
-import React, { useState } from 'react'
+import React, { useState, useRef } from 'react'
 import { Settings, Download, RefreshCw, Trash2, Link as LinkIcon, Play, Square, Loader2, CheckCircle2 } from 'lucide-react'
 import { useBiliWebSocket } from '../hooks/useBiliWebSocket'
-import { addBiliVideo, startDownload, stopDownload, getBiliVideos, BiliVideo } from '../services/biliApi'
+import { addBiliVideo, startDownload, stopDownload, getBiliVideos, deleteBiliVideo, BiliVideo } from '../services/biliApi'
 import BiliHistoryPanel from '../components/BiliLogs'
 import BiliRealtimeLogs from '../components/BiliRealtimeLogs'
 import BiliConfigPanel from '../components/BiliConfigPanel'
 import toast from 'react-hot-toast'
 
+// 从队列条目解析多P信息：bv_id 形如 BVxxxx_p87，标题形如 "系列标题 P87 分P名"
+const parseMultiPart = (video: BiliVideo) => {
+    const m = video.bv_id.match(/_p(\d+)$/)
+    if (!m) return null
+    const t = video.title || ''
+    const tm = t.match(/^(.*?)\s+P\d+\s+(.*)$/)
+    return {
+        pageNo: m[1],
+        series: tm ? tm[1] : t,
+        label: tm ? `P${m[1]} · ${tm[2]}` : `P${m[1]}`,
+    }
+}
+
 // 简化版视频卡片组件
-const VideoQueueItem = ({ video, onDelete }: { video: BiliVideo, onDelete: (id: number) => void }) => (
-    <div className="flex items-center justify-between p-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-100 dark:border-gray-700 shadow-sm hover:shadow-md transition-shadow">
+const VideoQueueItem = ({ video, selected, onToggle, onDelete }: {
+    video: BiliVideo,
+    selected: boolean,
+    onToggle: (id: number) => void,
+    onDelete: (id: number) => void
+}) => {
+    const part = parseMultiPart(video)
+    return (
+    <div className={`flex items-center justify-between p-3 bg-white dark:bg-gray-800 rounded-lg border shadow-sm hover:shadow-md transition-all ${
+        selected ? 'border-blue-400 dark:border-blue-500 ring-1 ring-blue-300' : 'border-gray-100 dark:border-gray-700'
+    }`}>
         <div className="flex items-center gap-3 overflow-hidden">
+            <input
+                type="checkbox"
+                checked={selected}
+                onChange={() => onToggle(video.id)}
+                className="w-4 h-4 accent-blue-600 shrink-0 cursor-pointer"
+            />
             <div className={`w-2 h-2 rounded-full shrink-0 ${video.status === 'running' ? 'bg-blue-500 animate-pulse' :
                 video.status === 'downloaded' ? 'bg-green-500' :
                     video.status === 'failed' ? 'bg-red-500' : 'bg-gray-300'
                 }`} />
             <div className="min-w-0">
-                <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">{video.title || video.bv_id}</p>
-                <p className="text-xs text-gray-400 truncate">{video.url}</p>
+                <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
+                    {part ? part.label : (video.title || video.bv_id)}
+                </p>
+                <p className="text-xs text-gray-400 truncate" title={video.url}>
+                    {part ? part.series : video.url}
+                </p>
             </div>
         </div>
-        <div className="flex items-center gap-2">
-            <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-500">
+        <div className="flex items-center gap-2 shrink-0 pl-2">
+            <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-500 whitespace-nowrap">
                 {video.status === 'pending' ? '等待中' :
                     video.status === 'running' ? '下载中' :
                         video.status === 'downloaded' ? '已完成' : '失败'}
@@ -36,7 +68,8 @@ const VideoQueueItem = ({ video, onDelete }: { video: BiliVideo, onDelete: (id: 
             )}
         </div>
     </div>
-)
+    )
+}
 
 const BiliDownload: React.FC = () => {
     const { isConnected, logs, progress, clearLogs } = useBiliWebSocket()
@@ -44,6 +77,19 @@ const BiliDownload: React.FC = () => {
     const [videos, setVideos] = useState<BiliVideo[]>([])
     const [showConfig, setShowConfig] = useState(false)
     const [isLoading, setIsLoading] = useState(false)
+    const [historyRefreshKey, setHistoryRefreshKey] = useState(0)
+    const prevStatusRef = useRef(progress.status)
+
+    // 任务从"下载中"变为其他状态时，自动刷新历史记录并给出提示
+    React.useEffect(() => {
+        if (prevStatusRef.current === 'running' && progress.status !== 'running') {
+            setHistoryRefreshKey(k => k + 1)
+            if (progress.status !== 'stopped' && progress.completed > 0) {
+                toast.success(`下载任务完成，共 ${progress.completed} 个视频`)
+            }
+        }
+        prevStatusRef.current = progress.status
+    }, [progress.status, progress.completed])
 
     // 加载视频列表
     const loadVideos = async () => {
@@ -62,13 +108,13 @@ const BiliDownload: React.FC = () => {
         return () => clearInterval(timer)
     }, [])
 
-    const handleAddVideo = async () => {
+    const handleAddVideo = async (allPages = false) => {
         if (!inputUrl.trim()) return
         setIsLoading(true)
         try {
-            await addBiliVideo(inputUrl)
+            const res: any = await addBiliVideo(inputUrl, allPages)
             setInputUrl('')
-            toast.success('已添加到队列')
+            toast.success(res?.message || (allPages ? '已添加所有分P' : '已添加到队列'))
             loadVideos()
         } catch (error: any) {
             toast.error(error.response?.data?.detail || '添加失败')
@@ -77,28 +123,58 @@ const BiliDownload: React.FC = () => {
         }
     }
 
-    const handleStartDownload = async () => {
+    const handleStartDownload = async (onlySelected = false) => {
         try {
-            await startDownload()
-            toast.success('开始下载任务')
-        } catch (error) {
-            toast.error('启动失败')
+            const ids = onlySelected ? selectedIds : undefined
+            await startDownload(ids)
+            toast.success(onlySelected ? `开始下载所选 ${ids.length} 个视频` : '开始下载全部任务')
+        } catch (error: any) {
+            toast.error(error.response?.data?.detail || '启动失败')
         }
     }
 
     const handleStopDownload = async () => {
         try {
             await stopDownload()
-            toast.error('已停止下载')
-        } catch (error) {
-            toast.error('停止失败')
+            toast.success('已停止下载')
+        } catch (error: any) {
+            toast.error(error.response?.data?.detail || '停止失败')
         }
     }
 
     const pendingVideos = videos.filter(v => v.status === 'pending' || v.status === 'running')
-    // const completedVideosCount = videos.filter(v => v.status === 'downloaded').length
     const isRunning = progress.status === 'running'
     const progressPercent = progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0
+
+    // ==================== 队列多选与删除 ====================
+    const [selectedIds, setSelectedIds] = useState<number[]>([])
+    const [isDeleting, setIsDeleting] = useState(false)
+
+    const allSelected = pendingVideos.length > 0 && pendingVideos.every(v => selectedIds.includes(v.id))
+
+    const toggleSelect = (id: number) => {
+        setSelectedIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id])
+    }
+
+    const toggleSelectAll = () => {
+        setSelectedIds(allSelected ? [] : pendingVideos.map(v => v.id))
+    }
+
+    const handleDeleteVideos = async (ids: number[]) => {
+        if (ids.length === 0 || isDeleting) return
+        setIsDeleting(true)
+        try {
+            await Promise.all(ids.map(id => deleteBiliVideo(id)))
+            toast.success(`已删除 ${ids.length} 个视频`)
+            setSelectedIds([])
+            loadVideos()
+        } catch (error: any) {
+            toast.error(error.response?.data?.detail || '删除失败')
+            loadVideos()
+        } finally {
+            setIsDeleting(false)
+        }
+    }
 
     return (
         <div className="h-full flex overflow-hidden bg-gray-50 dark:bg-gray-900">
@@ -114,7 +190,7 @@ const BiliDownload: React.FC = () => {
                     </span>
                 </div>
                 <div className="flex-1 overflow-y-auto p-2">
-                    <BiliHistoryPanel />
+                    <BiliHistoryPanel refreshKey={historyRefreshKey} />
                 </div>
             </aside>
 
@@ -170,9 +246,18 @@ const BiliDownload: React.FC = () => {
                             />
                             <div className="absolute inset-y-2 right-2 flex gap-2">
                                 <button
-                                    onClick={handleAddVideo}
+                                    onClick={() => handleAddVideo(true)}
                                     disabled={isLoading || !inputUrl}
-                                    className="px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium shadow-lg shadow-blue-500/20 
+                                    title="把该视频的所有分P加入下载队列"
+                                    className="px-4 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-xl font-medium border border-gray-200 dark:border-gray-600
+                                             disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                                >
+                                    全部分P
+                                </button>
+                                <button
+                                    onClick={() => handleAddVideo(false)}
+                                    disabled={isLoading || !inputUrl}
+                                    className="px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium shadow-lg shadow-blue-500/20
                                              disabled:opacity-50 disabled:shadow-none disabled:cursor-not-allowed transition-all flex items-center gap-2"
                                 >
                                     {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : '添加'}
@@ -201,15 +286,30 @@ const BiliDownload: React.FC = () => {
                                         </div>
                                     )}
                                 </div>
-                                <div>
+                                <div className="flex items-center gap-2 shrink-0">
                                     {!isRunning ? (
-                                        <button
-                                            onClick={handleStartDownload}
-                                            className="flex items-center gap-2 px-6 py-2.5 bg-green-500 hover:bg-green-600 text-white rounded-lg font-semibold shadow-lg shadow-green-500/20 transition-all active:scale-95"
-                                        >
-                                            <Play className="w-4 h-4" fill="currentColor" />
-                                            开始全部
-                                        </button>
+                                        <>
+                                            {selectedIds.length > 0 && (
+                                                <button
+                                                    onClick={() => handleStartDownload(true)}
+                                                    className="flex items-center gap-2 px-6 py-2.5 bg-green-500 hover:bg-green-600 text-white rounded-lg font-semibold shadow-lg shadow-green-500/20 transition-all active:scale-95"
+                                                >
+                                                    <Play className="w-4 h-4" fill="currentColor" />
+                                                    下载所选 ({selectedIds.length})
+                                                </button>
+                                            )}
+                                            <button
+                                                onClick={() => handleStartDownload(false)}
+                                                className={`flex items-center gap-2 px-6 py-2.5 rounded-lg font-semibold transition-all active:scale-95 ${
+                                                    selectedIds.length > 0
+                                                        ? 'bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-700 hover:bg-blue-50 dark:hover:bg-gray-600'
+                                                        : 'bg-green-500 hover:bg-green-600 text-white shadow-lg shadow-green-500/20'
+                                                }`}
+                                            >
+                                                <Play className="w-4 h-4" fill="currentColor" />
+                                                开始全部
+                                            </button>
+                                        </>
                                     ) : (
                                         <button
                                             onClick={handleStopDownload}
@@ -230,10 +330,35 @@ const BiliDownload: React.FC = () => {
                     <div className="h-full flex flex-col md:flex-row max-w-7xl mx-auto">
                         {/* 待下载/下载中队列 */}
                         <div className="flex-1 overflow-y-auto p-6 border-r border-gray-100 dark:border-gray-800">
-                            <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-4 flex items-center justify-between">
-                                下载队列
-                                {pendingVideos.length > 0 && <span className="bg-gray-100 px-2 py-0.5 rounded-full text-xs">{pendingVideos.length}</span>}
-                            </h3>
+                            <div className="flex items-center justify-between mb-4">
+                                <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider flex items-center gap-2">
+                                    下载队列
+                                    {pendingVideos.length > 0 && <span className="bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded-full text-xs">{pendingVideos.length}</span>}
+                                </h3>
+                                {pendingVideos.length > 0 && (
+                                    <div className="flex items-center gap-3">
+                                        <label className="flex items-center gap-1.5 text-sm text-gray-500 dark:text-gray-400 cursor-pointer select-none">
+                                            <input
+                                                type="checkbox"
+                                                checked={allSelected}
+                                                onChange={toggleSelectAll}
+                                                className="w-4 h-4 accent-blue-600 cursor-pointer"
+                                            />
+                                            全选
+                                        </label>
+                                        {selectedIds.length > 0 && (
+                                            <button
+                                                onClick={() => handleDeleteVideos(selectedIds)}
+                                                disabled={isDeleting}
+                                                className="flex items-center gap-1 px-3 py-1.5 text-sm bg-red-50 hover:bg-red-100 dark:bg-red-900/30 dark:hover:bg-red-900/50 text-red-600 dark:text-red-400 rounded-lg transition-colors disabled:opacity-50"
+                                            >
+                                                {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                                                删除所选 ({selectedIds.length})
+                                            </button>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
                             {pendingVideos.length === 0 ? (
                                 <div className="text-center py-20 text-gray-400 dark:text-gray-600 border-2 border-dashed border-gray-100 dark:border-gray-800 rounded-2xl">
                                     <div className="mx-auto w-16 h-16 bg-gray-50 dark:bg-gray-800 rounded-full flex items-center justify-center mb-4">
@@ -248,10 +373,9 @@ const BiliDownload: React.FC = () => {
                                         <VideoQueueItem
                                             key={video.id}
                                             video={video}
-                                            onDelete={(id) => {
-                                                // 实际项目中这里应调用 deleteBiliVideo API
-                                                console.log('delete', id)
-                                            }}
+                                            selected={selectedIds.includes(video.id)}
+                                            onToggle={toggleSelect}
+                                            onDelete={(id) => handleDeleteVideos([id])}
                                         />
                                     ))}
                                 </div>
