@@ -62,6 +62,10 @@ YTDLP_DIAGNOSTIC_MARKERS = (
     "unable to extract",
     "http error 403",
     "http error 412",
+    "youtube",
+    "no video formats",
+    "no formats found",
+    "retrying",
 )
 BILIBILI_BVID_PATTERN = re.compile(r"(BV[0-9A-Za-z]+)", re.IGNORECASE)
 DOUYIN_VIDEO_ID_PATTERN = re.compile(r"/(?:video|share/video)/(\d+)", re.IGNORECASE)
@@ -71,6 +75,7 @@ BILIBILI_MIXIN_KEY_ENC_TAB = [
     61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11,
     36, 20, 34, 44, 52,
 ]
+YOUTUBE_HOST_MARKERS = ("youtube.com", "youtu.be", "youtube-nocookie.com")
 
 
 @dataclass
@@ -556,6 +561,17 @@ def _yt_dlp_options(headers: Optional[Dict[str, str]] = None, cookie: Optional[s
         "retries": 3,
         "http_headers": http_headers,
     }
+    youtube_clients = os.getenv("YTDLP_YOUTUBE_PLAYER_CLIENTS", "android_vr,web").strip()
+    if youtube_clients:
+        options["extractor_args"] = {
+            "youtube": {
+                "player_client": [
+                    item.strip()
+                    for item in youtube_clients.split(",")
+                    if item.strip()
+                ]
+            }
+        }
     if diagnostic_messages is not None:
         options["logger"] = YtDlpDiagnosticLogger(diagnostic_messages)
     impersonate_target = os.getenv("YTDLP_IMPERSONATE", "").strip()
@@ -569,6 +585,23 @@ def _yt_dlp_options(headers: Optional[Dict[str, str]] = None, cookie: Optional[s
         pass
 
     return options
+
+
+def _is_youtube_url(url: str) -> bool:
+    try:
+        host = urlparse(url or "").netloc.lower()
+    except Exception:
+        return False
+    return any(marker in host for marker in YOUTUBE_HOST_MARKERS)
+
+
+def _is_no_formats_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(marker in message for marker in (
+        "no video formats found",
+        "no formats found",
+        "requested format is not available",
+    ))
 
 
 def _candidate_key(candidate: Dict[str, Any]) -> str:
@@ -1164,14 +1197,17 @@ def _info_to_candidates(info: Dict[str, Any], page_title: str, source_url: str,
         if formats:
             formats.sort(key=lambda f: (f.get("height") or 0, f.get("filesize") or 0), reverse=True)
         else:
-            formats = [{
-                "formatId": "best",
-                "label": "Best available",
-                "height": None,
-                "ext": item.get("ext"),
-                "filesize": _format_filesize(item.get("filesize")),
-                "protocol": item.get("protocol"),
-            }]
+            if item.get("url") and item.get("vcodec") not in {None, "none"}:
+                formats = [{
+                    "formatId": "best",
+                    "label": "Best available",
+                    "height": item.get("height"),
+                    "ext": item.get("ext"),
+                    "filesize": _format_filesize(item.get("filesize")),
+                    "protocol": item.get("protocol"),
+                }]
+            else:
+                continue
 
         resolved_source = (
             item.get("webpage_url")
@@ -1211,6 +1247,53 @@ def _resolve_with_ytdlp(url: str, page_title: str = "", headers: Optional[Dict[s
     return _info_to_candidates(info, page_title=page_title, source_url=url, candidate_prefix=candidate_prefix)
 
 
+def _resolve_with_ytdlp_retrying_public_youtube(url: str, page_title: str = "",
+                                               headers: Optional[Dict[str, str]] = None,
+                                               cookie: Optional[str] = None,
+                                               cookie_details: Optional[List[Dict[str, Any]]] = None,
+                                               referer: Optional[str] = None,
+                                               candidate_prefix: str = "yt",
+                                               yt_dlp_messages: Optional[List[str]] = None,
+                                               yt_dlp_cookie_diagnostics: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    try:
+        candidates = _resolve_with_ytdlp(
+            url,
+            page_title=page_title,
+            headers=headers,
+            cookie=cookie,
+            cookie_details=cookie_details,
+            referer=referer,
+            candidate_prefix=candidate_prefix,
+            yt_dlp_messages=yt_dlp_messages,
+            yt_dlp_cookie_diagnostics=yt_dlp_cookie_diagnostics,
+        )
+        if candidates or not _is_youtube_url(url) or not (cookie or cookie_details):
+            return candidates
+        _append_unique_diagnostic(
+            yt_dlp_messages,
+            "YouTube returned no downloadable video formats with browser cookies; retrying as public video without cookies.",
+        )
+    except Exception as exc:
+        if not (_is_youtube_url(url) and (cookie or cookie_details) and _is_no_formats_error(exc)):
+            raise
+        _append_unique_diagnostic(
+            yt_dlp_messages,
+            "YouTube returned no video formats with browser cookies; retrying as public video without cookies.",
+        )
+
+    return _resolve_with_ytdlp(
+        url,
+        page_title=page_title,
+        headers=headers,
+        cookie=None,
+        cookie_details=[],
+        referer=referer,
+        candidate_prefix=candidate_prefix,
+        yt_dlp_messages=yt_dlp_messages,
+        yt_dlp_cookie_diagnostics=yt_dlp_cookie_diagnostics,
+    )
+
+
 def resolve_web_video(page_url: str, page_title: str = "", detected_streams: Optional[List[Dict[str, Any]]] = None,
                       headers: Optional[Dict[str, str]] = None, cookie: Optional[str] = None,
                       cookie_details: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
@@ -1223,7 +1306,7 @@ def resolve_web_video(page_url: str, page_title: str = "", detected_streams: Opt
 
     if page_url:
         try:
-            candidates.extend(_resolve_with_ytdlp(
+            candidates.extend(_resolve_with_ytdlp_retrying_public_youtube(
                 _normalize_page_url(page_url),
                 page_title=page_title,
                 headers=headers,
@@ -1278,7 +1361,7 @@ def resolve_web_video(page_url: str, page_title: str = "", detected_streams: Opt
         if _is_manifest_stream(stream):
             try:
                 stream_prefix = _stream_id(url)
-                resolved = _resolve_with_ytdlp(
+                resolved = _resolve_with_ytdlp_retrying_public_youtube(
                     url,
                     page_title=page_title,
                     headers=headers,
@@ -1371,6 +1454,7 @@ def _download_with_ytdlp(job_id: str, payload: Dict[str, Any]) -> Path:
     cookie = payload.get("cookie") or payload.get("cookies")
     cookie_details = payload.get("cookieDetails") or payload.get("cookie_details") or []
     headers = payload.get("headers") or {}
+    referer = payload.get("pageUrl") or payload.get("page_url")
 
     def progress_hook(status: Dict[str, Any]):
         if status.get("status") == "downloading":
@@ -1381,21 +1465,35 @@ def _download_with_ytdlp(job_id: str, payload: Dict[str, Any]) -> Path:
         elif status.get("status") == "finished":
             job_manager.update(job_id, status="downloading", progress=90, message="Finalizing media")
 
-    options = _yt_dlp_options(headers=headers, cookie=cookie, referer=payload.get("pageUrl") or payload.get("page_url"))
-    options.update({
-        "outtmpl": outtmpl,
-        "format": format_id,
-        "merge_output_format": "mp4",
-        "progress_hooks": [progress_hook],
-        "restrictfilenames": False,
-    })
+    def run_download(active_cookie: Optional[str], active_cookie_details: List[Dict[str, Any]], message: str) -> None:
+        options = _yt_dlp_options(headers=headers, cookie=active_cookie, referer=referer)
+        options.update({
+            "outtmpl": outtmpl,
+            "format": format_id,
+            "merge_output_format": "mp4",
+            "progress_hooks": [progress_hook],
+            "restrictfilenames": False,
+        })
 
-    job_manager.update(job_id, status="downloading", progress=5, message="Resolving selected media")
-    with _temporary_cookiefile(cookie or "", cookie_details=cookie_details) as cookie_file:
-        if cookie_file:
-            options["cookiefile"] = cookie_file
-        with yt_dlp.YoutubeDL(options) as ydl:
-            ydl.download([url])
+        job_manager.update(job_id, status="downloading", progress=5, message=message)
+        with _temporary_cookiefile(active_cookie or "", cookie_details=active_cookie_details) as cookie_file:
+            if cookie_file:
+                options["cookiefile"] = cookie_file
+            with yt_dlp.YoutubeDL(options) as ydl:
+                ydl.download([url])
+
+    try:
+        run_download(cookie, cookie_details, "Resolving selected media")
+    except Exception as exc:
+        if not (_is_youtube_url(url) and (cookie or cookie_details) and _is_no_formats_error(exc)):
+            raise
+        job_manager.update(
+            job_id,
+            status="downloading",
+            progress=6,
+            message="YouTube cookies returned no formats; retrying public video",
+        )
+        run_download(None, [], "Retrying public YouTube video")
 
     matches = sorted(UPLOAD_DIR.glob(f"{job_prefix}.*"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not matches:
